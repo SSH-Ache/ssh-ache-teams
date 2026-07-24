@@ -16,6 +16,9 @@ export interface Membership {
   role: string;
   planTier: string;
   isPersonal?: boolean;
+  // Server-computed feature flag (entitlementsFor(planTier).features.commandSuggest). Absent on
+  // older servers → treated as enabled; explicit false = the future paid-only gate turned it off.
+  commandSuggest?: boolean;
 }
 export interface TeamConnMeta {
   schema: 1;
@@ -67,6 +70,12 @@ const teamKeys = new Map<string, { tk: Uint8Array; keyGeneration: number }>();
 export const isSignedIn = (): boolean => vault !== null;
 export const getBase = (): string => base;
 export const currentMemberships = (): Membership[] => cachedMemberships;
+
+// Command autosuggest is a Teams-app feature. Gate: signed in with at least one membership the
+// server hasn't explicitly denied. Absent flag (old server) counts as enabled, so the feature
+// works before the platform ships the entitlement; flipping FREE→false later turns it off here.
+export const hasCommandSuggest = (): boolean =>
+  isSignedIn() && cachedMemberships.some((m) => m.commandSuggest !== false);
 
 // Re-fetch memberships for an already-unlocked session (used to repopulate the UI on remount).
 export async function loadMemberships(): Promise<Membership[]> {

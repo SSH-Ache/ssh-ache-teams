@@ -628,6 +628,54 @@ async fn sftp_connect(
     Ok(home)
 }
 
+// Read the remote shell's command history to seed the terminal autosuggest on connect. Best-effort:
+// opens its own short-lived authenticated session (same path as the SFTP panel — never touches the
+// live PTY channel), reads ~/.zsh_history + ~/.bash_history, and returns the raw text for the
+// frontend to parse. Returns "" if nothing is readable. The history stays on the user's machine.
+#[tauri::command]
+async fn ssh_history(
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+    secret: String,
+    key_path: String,
+    key_text: String,
+    jump: Option<Jump>,
+) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+    let (mut session, _jump) = open_session(&host, port, jump.as_ref()).await?;
+    do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
+    let channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("channel: {e}"))?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| format!("sftp subsystem: {e}"))?;
+    let sftp = SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| format!("sftp init: {e}"))?;
+    let home = sftp.canonicalize(".").await.unwrap_or_else(|_| ".".to_string());
+    let home = home.trim_end_matches('/');
+    let mut out = String::new();
+    const CAP: usize = 512 * 1024; // keep the tail; a huge history can't balloon memory
+    for name in [".zsh_history", ".bash_history"] {
+        let path = format!("{home}/{name}");
+        if let Ok(mut f) = sftp.open(&path).await {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).await.is_ok() {
+                let slice: &[u8] = if buf.len() > CAP { &buf[buf.len() - CAP..] } else { &buf };
+                out.push_str(&String::from_utf8_lossy(slice)); // lossy: partial UTF-8 → safe
+                out.push('\n');
+            }
+        }
+    }
+    // _jump is held until here so the tunnel stays up for the reads.
+    Ok(out)
+}
+
 #[tauri::command]
 async fn sftp_list(
     state: State<'_, SftpState>,
@@ -1593,6 +1641,7 @@ fn main() {
             secret_delete,
             trust_host,
             sftp_connect,
+            ssh_history,
             sftp_list,
             sftp_put,
             sftp_get,

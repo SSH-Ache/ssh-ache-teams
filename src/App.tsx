@@ -18,6 +18,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { History, attachAutosuggest, parseShellHistory } from "./autosuggest";
 import logoMark from "./assets/logo-mark.svg";
 
 type S = React.CSSProperties;
@@ -352,10 +353,20 @@ const xtermTheme = (t: any) => {
 };
 const cursorStyleOf = (c: string) => (c === "bar" ? "bar" : c === "underline" ? "underline" : "block");
 
+// Build the autosuggest hook object, tolerating missing props (older callers / read-only panes).
+function mkSuggestHooks(send: (d: string) => void, p: any, sessionId: string) {
+  return {
+    send,
+    suggest: p.suggest || (() => null),
+    record: p.recordCmd ? (cmd: string) => p.recordCmd(cmd, sessionId) : (() => {}),
+    cfg: p.suggestCfg ? () => p.suggestCfg(sessionId) : (() => ({ on: false, color: "#8b8b95" })),
+  };
+}
+
 // A live SSH pane: a real xterm.js terminal wired to the russh backend over a
 // per-pane sessionId. Created once on mount; disconnected + disposed on unmount.
 // In a plain browser (no Tauri runtime) it shows a hint instead of connecting.
-function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register, isBroadcast, onBroadcast, onCwd, getTriggers, onTrigger }: any) {
+function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, onError, onClosed, onHostKey, register, isBroadcast, onBroadcast, onCwd, getTriggers, onTrigger, suggest, recordCmd, suggestCfg, seedHistory }: any) {
   const wrapRef = React.useRef<any>(null);
   const inst = React.useRef<any>(null);
   const searchRef = React.useRef<any>(null);
@@ -471,17 +482,18 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       invoke("pty_spawn", { id: session.sessionId, cols: term.cols, rows: term.rows, onData: onDataL, onClose: onCloseL })
         .then(() => { if (!disposed && onConnected) onConnected(); })
         .catch((e) => { term.writeln(`\r\n\x1b[31mlocal shell failed: ${String(e)}\x1b[0m`); if (onError) onError(String(e)); });
-      const dataSubL = term.onData((d) => {
+      const sendL = (d: string) => {
         if (isBroadcast && isBroadcast() && onBroadcast) { onBroadcast(d); return; }
         invoke("pty_write", { id: session.sessionId, data: d }).catch(() => {});
-      });
+      };
+      const sugL = attachAutosuggest(term, wrapRef.current, mkSuggestHooks(sendL, { suggest, recordCmd, suggestCfg }, session.sessionId));
       const roL = new ResizeObserver(() => { try { fit.fit(); invoke("pty_resize", { id: session.sessionId, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {} });
       roL.observe(wrapRef.current);
       return () => {
         disposed = true;
         if (register) register(session.sessionId, null);
         roL.disconnect();
-        dataSubL.dispose();
+        sugL.dispose();
         invoke("pty_close", { id: session.sessionId }).catch(() => {});
         term.dispose();
       };
@@ -561,6 +573,16 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
         // On-connect snippet: run the host's saved command once the shell is up.
         if (h.snippet && h.snippet.trim()) invoke("ssh_write", { sessionId: session.sessionId, data: h.snippet.trim() + "\n" }).catch(() => {});
         void startMirror(); // if this is a team connection, start mirroring output for spectators
+        // Seed autosuggest from the remote shell history (best-effort; only when the feature is on).
+        try {
+          const scfg = suggestCfg ? suggestCfg(session.sessionId) : null;
+          if (scfg && scfg.on && seedHistory) {
+            invoke("ssh_history", {
+              host: h.addr, port: Number(h.port) || 22, user: h.user || "root", auth: h.auth || "password",
+              secret: session.secret || "", keyPath: h.keyPath || "", keyText: session.keyText || "", jump: session.jump || null,
+            }).then((txt) => { if (!disposed) seedHistory(String(txt || "")); }).catch(() => {});
+          }
+        } catch (_) {}
         if (onConnected) onConnected();
       })
       .catch((e) => {
@@ -582,10 +604,11 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
         if (onError) onError(msg);
       });
 
-    const dataSub = term.onData((d) => {
+    const sendS = (d: string) => {
       if (isBroadcast && isBroadcast() && onBroadcast) { onBroadcast(d); return; }
       invoke("ssh_write", { sessionId: session.sessionId, data: d }).catch(() => {});
-    });
+    };
+    const sug = attachAutosuggest(term, wrapRef.current, mkSuggestHooks(sendS, { suggest, recordCmd, suggestCfg }, session.sessionId));
     const ro = new ResizeObserver(() => {
       try { fit.fit(); invoke("ssh_resize", { sessionId: session.sessionId, cols: term.cols, rows: term.rows }).catch(() => {}); } catch (_) {}
     });
@@ -595,7 +618,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       disposed = true;
       if (register) register(session.sessionId, null);
       ro.disconnect();
-      dataSub.dispose();
+      sug.dispose();
       if (mirror.ws) { try { mirror.ws.close(); } catch (_) {} }
       invoke("ssh_disconnect", { sessionId: session.sessionId }).catch(() => {});
       term.dispose();
@@ -723,6 +746,59 @@ export default class App extends React.Component<any, any> {
   removeTrigger = (id) => this.setState(s => ({ settings: { ...s.settings, triggers: (s.settings.triggers || []).filter(t => t.id !== id) } }));
   toggleTriggerField = (id, field) => this.setState(s => ({ settings: { ...s.settings, triggers: (s.settings.triggers || []).map(t => t.id === id ? { ...t, [field]: !t[field] } : t) } }));
 
+  // ---- command autosuggest (fish-style ghost text from history) ----
+  // Kept in its own localStorage key, not in the `settings`/backup bundle, so captured commands
+  // never ride along in an export or reach the backend. Loaded once here; saved debounced on Enter.
+  hist = new History(1000, (() => { try { const r = localStorage.getItem('sshache.cmdhistory'); const a = r ? JSON.parse(r) : []; return Array.isArray(a) ? a : []; } catch (e) { return []; } })());
+  _histT = null;
+  saveHist = () => { clearTimeout(this._histT); this._histT = setTimeout(() => { try { localStorage.setItem('sshache.cmdhistory', JSON.stringify(this.hist.toJSON())); } catch (e) {} }, 800); };
+  // Per-tab enable state. A tab's `suggest` is undefined by default (inherit the global Settings
+  // toggle, which acts as the default); the status-bar badge sets an explicit true/false to override
+  // for that tab. LATER (paid-only): AND tabSuggestOn with `teams.hasCommandSuggest()` — the
+  // entitlement plumbing (platform flag + /me + client.ts) is in place, so the paid flip is one line.
+  tabOfSession = (sessionId) => (this.state.tabs || []).find(t => (t.panes || []).some(p => p.sessionId === sessionId));
+  // A tab's stable key across reloads is its host id (tabs are restored by host id — see openHosts).
+  // Local-shell tabs have none, so their toggle is session-only.
+  tabHostId = (tab) => { const p = ((tab && tab.panes) || []).find(pp => pp && pp.host && pp.host.id); return p ? p.host.id : null; };
+  // Resolve a per-tab flag: this-session override on the tab, else the persisted per-host pref, else
+  // undefined (inherit the global Settings default).
+  suggestPref = (tab, field) => {
+    if (tab && tab[field] !== undefined) return tab[field];
+    const hid = this.tabHostId(tab);
+    const prefs = (this.state.settings && this.state.settings.suggestPrefs) || {};
+    if (hid && prefs[hid] && prefs[hid][field] !== undefined) return prefs[hid][field];
+    return undefined;
+  };
+  tabSuggestOn = (tab) => { const v = this.suggestPref(tab, 'suggest'); return v !== undefined ? !!v : !!(this.state.settings || {}).cmdSuggest; };
+  // Set the flag on the tab (immediate) and persist it per-host in settings.suggestPrefs (survives
+  // reload via the existing state persistence). Host-less local tabs stay session-only.
+  withSuggestPref = (s, tab, field, val) => {
+    const tabs = s.tabs.map(t => t.id === tab.id ? { ...t, [field]: val } : t);
+    const hid = this.tabHostId(tab);
+    if (!hid) return { tabs };
+    const prefs = { ...(s.settings.suggestPrefs || {}) };
+    prefs[hid] = { ...(prefs[hid] || {}), [field]: val };
+    return { tabs, settings: { ...s.settings, suggestPrefs: prefs } };
+  };
+  toggleTabSuggest = () => this.setState(s => { const tab = s.tabs.find(t => t.id === s.activeTabId); return tab ? this.withSuggestPref(s, tab, 'suggest', !this.tabSuggestOn(tab)) : null; });
+
+  suggestFor = (prefix) => this.hist.suggest(prefix);
+  // Record only when the pane's tab has autocomplete on (respects a per-tab off toggle).
+  recordCmd = (cmd, sessionId) => { if (!this.tabSuggestOn(this.tabOfSession(sessionId))) return; this.hist.add(cmd); this.saveHist(); };
+  // Seed history from a remote host's shell-history file (read over SFTP on connect). Local-only.
+  // The caller gates on suggestCfg().on, so this just parses + stores.
+  seedHistory = (raw) => {
+    if (!raw) return;
+    const cmds = parseShellHistory(raw);
+    for (const c of cmds) this.hist.add(c);
+    if (cmds.length) this.saveHist();
+  };
+  suggestCfg = (sessionId) => {
+    const th = this.THEMES[this.state.themeId] || {};
+    const tab = sessionId ? this.tabOfSession(sessionId) : this.state.tabs.find(t => t.id === this.state.activeTabId);
+    return { on: this.tabSuggestOn(tab), color: th.fgDim || th.fg || '#8b8b95' };
+  };
+
   // Live cwd from OSC 7 → pane header.
   setPaneCwd = (sessionId, cwd) => {
     if (!cwd) return;
@@ -796,7 +872,7 @@ export default class App extends React.Component<any, any> {
     vaultKeys: [], // [{ id, name, label, createdAt }] — private key text lives in the keychain (key:<id>)
     keysOpen: false, // Key Vault modal
     form: { name:'', host:'', port:'22', user:'', auth:'password', password:'', keyMode:'file', keyPath:'', keyText:'', passphrase:'', vaultKeyId:'', saveKeyName:'', folder:'', jumpHost:'', snippet:'', tagInput:'', tags:[] },
-    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsEmail:'' },
+    settings: { fontSize:13, cursor:'block', scrollback:'10000', confirmClose:true, restoreTabs:true, lockIdle:false, triggers:[], teamsEmail:'', cmdSuggest:true, suggestPrefs:{} },
     activeTabId: 't1',
     activePaneId: 'p1',
     connecting: null,
@@ -2453,6 +2529,9 @@ export default class App extends React.Component<any, any> {
       connectingCardStyle: { width:'420px', maxWidth:'90%', background:'#0c0c10', border:'1px solid #26262e', borderRadius:'15px', padding:'28px', boxShadow:'0 36px 90px rgba(0,0,0,.65)', animation: (s.connecting && s.connecting.failed) ? 'acaShake .5s ease' : 'acaModal .18s cubic-bezier(.2,.8,.2,1)' },
       toasts,
       statusTheme: theme.name, statusHost: activeTab ? (activeTab.user + '@' + activeTab.addr) : '',
+      // Per-tab autocomplete toggle surfaced in the status bar.
+      statusSuggestOn: this.tabSuggestOn(activeTab),
+      toggleTabSuggest: () => this.toggleTabSuggest(),
       onDragOver: (e) => { e.preventDefault(); try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {} },
       onDropRemote: (e) => { e.preventDefault(); this.sftpDrop('remote'); },
       onDropLocal: (e) => { e.preventDefault(); this.sftpDrop('local'); },
@@ -2599,6 +2678,8 @@ export default class App extends React.Component<any, any> {
       cursorBlockStyle: segStyle(st.cursor === 'block'), cursorBarStyle: segStyle(st.cursor === 'bar'), cursorUnderStyle: segStyle(st.cursor === 'underline'),
       setCursorBlock: () => this.setSetting('cursor', 'block'), setCursorBar: () => this.setSetting('cursor', 'bar'), setCursorUnder: () => this.setSetting('cursor', 'underline'),
       scrollback: st.scrollback, onScrollback: (e) => this.setSetting('scrollback', e.target.value),
+      cmdSuggestTrack: toggleTrackStyle(!!st.cmdSuggest), cmdSuggestKnob: toggleKnobStyle(!!st.cmdSuggest),
+      toggleCmdSuggest: () => this.setSetting('cmdSuggest', !st.cmdSuggest),
       triggers: st.triggers || [],
       triggerDraft: s.triggerDraft, triggerColor: s.triggerColor,
       onTriggerDraft: (e) => this.setState({ triggerDraft: e.target.value }),
@@ -2956,7 +3037,7 @@ export default class App extends React.Component<any, any> {
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
                         {pane.live ? (
-                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind, wsUrl: pane.wsUrl, watchName: pane.watchName }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} />
+                          <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind, wsUrl: pane.wsUrl, watchName: pane.watchName }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} suggest={this.suggestFor} recordCmd={this.recordCmd} suggestCfg={this.suggestCfg} seedHistory={this.seedHistory} />
                         ) : (
                         <div style={pane.termStyle}>
                           {pane.lines.map((line, li) => (
@@ -3059,6 +3140,7 @@ export default class App extends React.Component<any, any> {
               {v.forwardCount > 0 && (<span style={css("color:#46d9a0;")}>⇄ {v.forwardCount} fwd</span>)}
               {v.broadcast && (<span onClick={v.toggleBroadcast} title="Broadcast input is on — click to turn off" style={css("color:#0c0b0a;background:#ff7a59;border-radius:4px;padding:1px 6px;cursor:pointer;font-weight:600;")}>⇉ broadcast</span>)}
               <span style={css("flex:1;")}></span>
+              <span onClick={v.toggleTabSuggest} title={v.statusSuggestOn ? "Command autocomplete is on for this tab — click to turn off" : "Command autocomplete is off for this tab — click to turn on"} style={css(v.statusSuggestOn ? "color:#0c0b0a;background:#ff7a59;border-radius:4px;padding:1px 7px;cursor:pointer;font-weight:600;" : "color:#6a6a74;border:1px solid #26262e;border-radius:4px;padding:1px 6px;cursor:pointer;")}>⌁ autocomplete</span>
               <span>UTF-8</span>
               <span>LF</span>
               <span style={css("color:#46d9a0;")}>● ready</span>
@@ -3499,6 +3581,15 @@ export default class App extends React.Component<any, any> {
                     <Hov as="input" value={v.triggerDraft} onChange={v.onTriggerDraft} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); v.addTrigger(); } }} placeholder="Pattern, e.g.  error|fatal|panic" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
                     <input type="color" value={v.triggerColor} onChange={v.onTriggerColor} title="Marker colour" style={css("width:30px;height:32px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:2px;cursor:pointer;")} />
                     <Hov as="button" onClick={v.addTrigger} s="padding:8px 14px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;flex:none;" h="background:#ff8d70;">Add</Hov>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={css("font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#ff7a59;margin-bottom:6px;")}>Command autosuggest</div>
+                  <div style={css("font-size:10.5px;color:#54545e;margin-bottom:12px;line-height:1.5;")}>As you type, the most recent matching command from your history shows as dim text — press Tab, →, or End to accept. Builds from commands you run (and the remote host's history on connect). Stays on this device.</div>
+                  <div style={css("display:flex;align-items:center;gap:12px;")}>
+                    <div style={css("flex:1;")}><div style={css("font-size:12px;color:#cfcfd6;")}>Suggest commands from history</div><div style={css("font-size:10.5px;color:#54545e;margin-top:2px;")}>Default for new tabs — toggle per tab in the status bar.</div></div>
+                    <div onClick={v.toggleCmdSuggest} style={v.cmdSuggestTrack}><span style={v.cmdSuggestKnob}></span></div>
                   </div>
                 </div>
 
