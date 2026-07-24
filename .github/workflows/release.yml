@@ -62,7 +62,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "SSH Ache ${{ github.ref_name }}"
-          releaseBody: "Download the installer for your platform below. macOS users can also `brew install --cask TanvirMahin24/sshache/sshache`."
+          releaseBody: "Download the installer for your platform below. macOS users can also `brew install --cask SSH-Ache/sshache/sshache`."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

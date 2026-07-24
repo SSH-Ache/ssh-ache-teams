@@ -223,6 +223,9 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.7.5', items: [
+    'Command autosuggest: as you type in the terminal, the most recent matching command from your history appears as dim ghost text — press Tab, → or End to accept. Fish-shell style, and 100% local: your history never leaves your machine.',
+  ] },
   { version: '0.7.4', items: [
     'The app now connects to the official SSH Ache backend automatically — the Server URL field is gone. Existing sign-ins keep working.',
   ] },
@@ -1115,7 +1118,7 @@ export default class App extends React.Component<any, any> {
     if (this.state.updateChecking) return;
     this.setState({ updateChecking: true });
     try {
-      const res = await fetch('https://api.github.com/repos/TanvirMahin24/sshache/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+      const res = await fetch('https://api.github.com/repos/SSH-Ache/ssh-ache-teams/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const j = await res.json();
       const latest = String(j.tag_name || '').replace(/^v/, '');

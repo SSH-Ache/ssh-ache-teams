@@ -5,12 +5,12 @@ Two workflows drive distribution:
 - **`.github/workflows/release.yml`** — builds installers for macOS, Windows, and
   Linux and attaches them to a GitHub Release.
 - **`.github/workflows/homebrew.yml`** — updates the Homebrew cask so
-  `brew install --cask TanvirMahin24/sshache/sshache` tracks the latest macOS build.
+  `brew install --cask SSH-Ache/sshache/sshache` tracks the latest macOS build.
 
 ## One-time setup
 
-1. **Create the Homebrew tap repo:** `TanvirMahin24/homebrew-sshache` (public,
-   empty is fine). The tap name `TanvirMahin24/sshache` maps to this repo.
+1. **Create the Homebrew tap repo:** `SSH-Ache/homebrew-sshache` (public,
+   empty is fine). The tap name `SSH-Ache/sshache` maps to this repo.
 2. **Add a tap token:** in the **app** repo, add a secret `HOMEBREW_TAP_TOKEN` —
    a Personal Access Token with write access to the tap repo (classic `repo`
    scope, or a fine-grained token scoped to `homebrew-sshache` with
@@ -46,6 +46,6 @@ Two workflows drive distribution:
 ## Verify the cask
 
 ```sh
-brew tap TanvirMahin24/sshache
+brew tap SSH-Ache/sshache
 brew install --cask sshache
 ```

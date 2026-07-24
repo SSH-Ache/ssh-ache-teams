@@ -1,11 +1,11 @@
 name: homebrew
 
 # When a GitHub Release is published, regenerate the Homebrew cask in the tap
-# repo (TanvirMahin24/homebrew-sshache) so `brew install --cask
-# TanvirMahin24/sshache/sshache` always points at the newest macOS build.
+# repo (SSH-Ache/homebrew-sshache) so `brew install --cask
+# SSH-Ache/sshache/sshache` always points at the newest macOS build.
 #
 # Prerequisites (one-time):
-#   1. Create the tap repo: https://github.com/TanvirMahin24/homebrew-sshache
+#   1. Create the tap repo: https://github.com/SSH-Ache/homebrew-sshache
 #   2. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on
 #      that tap repo (classic `repo` scope, or a fine-grained token).
 on:
@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      TAP_REPO: TanvirMahin24/homebrew-sshache
+      TAP_REPO: SSH-Ache/homebrew-sshache
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Resolve macOS asset + checksum

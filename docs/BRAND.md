@@ -6,8 +6,8 @@ the README, and the sshache.com site so everything stays consistent.
 ## Name & identity
 - **Product:** SSH Ache (one space, both words capitalised). Package id: `sshache`.
 - **Domain / landing:** https://sshache.com
-- **Repo:** https://github.com/TanvirMahin24/sshache
-- **Releases:** https://github.com/TanvirMahin24/sshache/releases
+- **Repo:** https://github.com/SSH-Ache/ssh-ache-teams
+- **Releases:** https://github.com/SSH-Ache/ssh-ache-teams/releases
 - **Author:** Noor Ajmir Tanvir — https://tanvirmahin.com · https://github.com/TanvirMahin24 · tanvirmahin24@gmail.com
 - **Support / tip:** https://www.patreon.com/cw/tanvirmahin24  (button label: "Buy me a coffee ☕")
 - **Motto (use prominently):** “Don't be so busy making a living that you forget to actually make a life.”
@@ -52,7 +52,7 @@ machine and encrypted at rest.
 - **Cross-platform** — built with Tauri 2 (Rust); macOS, Windows, Linux.
 
 ## Install (for docs)
-- **Homebrew (macOS):** `brew install --cask TanvirMahin24/sshache/sshache`
+- **Homebrew (macOS):** `brew install --cask SSH-Ache/sshache/sshache`
 - **Direct download:** platform builds (.dmg / .msi / .AppImage / .deb) from GitHub Releases.
 - **From source:** `npm install && npm run tauri build` (needs Rust + the Tauri prereqs).
 
