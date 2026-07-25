@@ -28,8 +28,25 @@ jobs:
       TAP_REPO: SSH-Ache/homebrew-sshache
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      # Homebrew publishing is optional and needs a tap + HOMEBREW_TAP_TOKEN (see header). When the
+      # secret isn't configured, skip the job cleanly instead of failing the whole release.
+      - name: Check for tap token
+        id: gate
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping Homebrew cask update. Add the secret (see workflow header) to enable it."
+            echo "### Homebrew cask skipped — HOMEBREW_TAP_TOKEN not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve macOS asset + checksum
         id: asset
+        if: steps.gate.outputs.has_token == 'true'
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -48,6 +65,7 @@ jobs:
           echo "sha=$sha"         >> "$GITHUB_OUTPUT"
 
       - name: Render and push cask
+        if: steps.gate.outputs.has_token == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.asset.outputs.version }}
@@ -55,9 +73,6 @@ jobs:
           ASSET_SHA: ${{ steps.asset.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN secret is not set — see workflow header."; exit 1
-          fi
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
           mkdir -p tap/Casks
           cat > tap/Casks/sshache.rb <<EOF
