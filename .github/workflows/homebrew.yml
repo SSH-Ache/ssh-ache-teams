@@ -2,7 +2,8 @@ name: homebrew
 
 # When a GitHub Release is published, regenerate the Homebrew cask in the tap
 # repo (SSH-Ache/homebrew-sshache) so `brew install --cask
-# SSH-Ache/sshache/sshache` always points at the newest macOS build.
+# SSH-Ache/sshache/sshache-teams` always points at the newest macOS build.
+# (The community edition owns the `sshache` cask; this Teams build is `sshache-teams`.)
 #
 # Prerequisites (one-time):
 #   1. Create the tap repo: https://github.com/SSH-Ache/homebrew-sshache
@@ -28,8 +29,25 @@ jobs:
       TAP_REPO: SSH-Ache/homebrew-sshache
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      # Homebrew publishing is optional and needs a tap + HOMEBREW_TAP_TOKEN (see header). When the
+      # secret isn't configured, skip the job cleanly instead of failing the whole release.
+      - name: Check for tap token
+        id: gate
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping Homebrew cask update. Add the secret (see workflow header) to enable it."
+            echo "### Homebrew cask skipped — HOMEBREW_TAP_TOKEN not configured" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve macOS asset + checksum
         id: asset
+        if: steps.gate.outputs.has_token == 'true'
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -48,6 +66,7 @@ jobs:
           echo "sha=$sha"         >> "$GITHUB_OUTPUT"
 
       - name: Render and push cask
+        if: steps.gate.outputs.has_token == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.asset.outputs.version }}
@@ -55,19 +74,16 @@ jobs:
           ASSET_SHA: ${{ steps.asset.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN secret is not set — see workflow header."; exit 1
-          fi
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
           mkdir -p tap/Casks
-          cat > tap/Casks/sshache.rb <<EOF
-          cask "sshache" do
+          cat > tap/Casks/sshache-teams.rb <<EOF
+          cask "sshache-teams" do
             version "${VERSION}"
             sha256 "${ASSET_SHA}"
 
             url "${ASSET_URL}"
-            name "SSH Ache"
-            desc "Desktop SSH client with terminal, SFTP, and port forwarding"
+            name "SSH Ache Teams"
+            desc "SSH Ache with Teams: E2EE shared connections, terminal, SFTP, port forwarding"
             homepage "https://sshache.com"
 
             app "SSH Ache.app"
@@ -82,10 +98,10 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/sshache.rb
+          git add Casks/sshache-teams.rb
           if git diff --cached --quiet; then
             echo "Cask already up to date."
           else
-            git commit -m "sshache ${VERSION}"
+            git commit -m "sshache-teams ${VERSION}"
             git push
           fi
