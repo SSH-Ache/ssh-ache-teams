@@ -1,7 +1,7 @@
 {
-  "name": "sshache",
+  "name": "sshache-teams",
   "private": true,
-  "version": "0.7.5",
+  "version": "0.8.0",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {

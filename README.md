@@ -79,7 +79,8 @@ Source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE). Yo
 
 ## Support
 
-If SSH Ache saves you time, you can [buy me a coffee ☕](https://www.patreon.com/cw/tanvirmahin24).
+Paid plans include support — email [hello@sshache.com](mailto:hello@sshache.com), or open an
+issue in this repo. Manage your plan and invoices at [sshache.com/app](https://sshache.com/app).
 
 ## Author
 

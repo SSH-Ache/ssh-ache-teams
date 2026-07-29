@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SSH Ache",
-  "version": "0.7.5",
-  "identifier": "com.sshache.app",
+  "productName": "SSH Ache Teams",
+  "version": "0.8.0",
+  "identifier": "com.sshache.teams",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,8 +12,8 @@
   "app": {
     "windows": [
       {
-        "title": "SSH Ache",
-        "width": 1100,
+        "title": "SSH Ache Teams",
+        "width": 1180,
         "height": 720,
         "minWidth": 720,
         "minHeight": 480,

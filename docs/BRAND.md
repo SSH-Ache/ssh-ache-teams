@@ -4,13 +4,24 @@ Single source of truth for logo, colours, copy, and links. Used by the app,
 the README, and the sshache.com site so everything stays consistent.
 
 ## Name & identity
-- **Product:** SSH Ache (one space, both words capitalised). Package id: `sshache`.
+- **Product:** SSH Ache **Teams** — the commercial edition. Bundle id: `com.sshache.teams`,
+  package id `sshache-teams`, app name "SSH Ache Teams".
+- **The other product:** the Apache-2.0 community edition is plain **SSH Ache**
+  (`com.sshache.app` / `sshache`, https://github.com/SSH-Ache/ssh-ache) — individual use only.
+  The two must never share a name, icon treatment, identifier, or install path.
 - **Domain / landing:** https://sshache.com
 - **Repo:** https://github.com/SSH-Ache/ssh-ache-teams
 - **Releases:** https://github.com/SSH-Ache/ssh-ache-teams/releases
 - **Author:** Noor Ajmir Tanvir — https://tanvirmahin.com · https://github.com/TanvirMahin24 · tanvirmahin24@gmail.com
-- **Support / tip:** https://www.patreon.com/cw/tanvirmahin24  (button label: "Buy me a coffee ☕")
+- **No tip / donation links in Teams.** Teams is paid software with a free plan; a "buy me a
+  coffee" button next to a subscription is the wrong ask. Tip links belong to the community
+  edition only. Teams surfaces "Account & billing" (https://sshache.com/app) instead.
 - **Motto (use prominently):** “Don't be so busy making a living that you forget to actually make a life.”
+
+## Teams accent
+The community edition is **orange** (`#ff7a59`). Teams chrome — the TEAMS badge, plan pills, the
+Teams & billing panel — is **violet**: `#8b7bff` / `#b79bff`, gradient
+`linear-gradient(135deg,#7c6cff,#b455f7)`. Kept off the terminal so user themes still own it.
 
 ## Forbidden copy (do NOT use these phrases anywhere)
 `local-first`, `no telemetry`, `no account`, `account required`, `open source`, `MIT`, `MIT license`.
