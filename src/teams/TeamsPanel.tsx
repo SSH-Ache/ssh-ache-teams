@@ -24,6 +24,8 @@ interface Props {
   onGoDashboard: () => void;
   // Push the selected team up so the title bar / sidebar can show it.
   onTeamContext?: (teamId: string) => void;
+  // Signed out from in here — let the app clear its team state (badge, sidebar account row).
+  onSignedOut?: () => void;
   // Open a URL in the OS browser (Tauri webview ignores target=_blank).
   openExt?: (url: string) => void;
 }
@@ -175,7 +177,7 @@ function Meter({ used, limit, noun }: { used: number; limit: number | null; noun
   );
 }
 
-export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGoDashboard, onTeamContext, openExt }: Props): React.ReactElement {
+export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGoDashboard, onTeamContext, onSignedOut, openExt }: Props): React.ReactElement {
   const [email, setEmail] = useState(defaults.email || '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -520,6 +522,7 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
     }
   }
 
+  // Signing out drops the in-memory vault AND the keychain entry that keeps this device signed in.
   function signOut(): void {
     teams.signOut();
     setSignedIn(false);
@@ -529,6 +532,7 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
     setSub(null);
     setEnt(null);
     onTeamContext?.('');
+    onSignedOut?.();
   }
 
   // ---- signed out: sell the product, then link the device -----------------
@@ -638,7 +642,11 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
         <span style={{ flex: 1 }} />
         <button style={btn('primary')} disabled={syncing} onClick={() => void runSync(true)}>{syncing ? 'Syncing…' : '↻ Sync now'}</button>
         <button style={btn()} onClick={() => setShowCreate((v2) => !v2)}>+ New team</button>
-        <button style={btn()} onClick={signOut}>Sign out</button>
+        {/* Account: who this device is signed in as, and the way back out. */}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px 5px 9px', border: '1px solid ' + V.line, background: V.soft, borderRadius: 999 }}>
+          <span style={{ fontSize: 11.5, color: '#b9b9c2', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{teams.currentEmail() || 'Signed in'}</span>
+          <button style={{ ...btn('danger'), padding: '5px 11px', fontSize: 11.5 }} onClick={signOut} title="Sign this account out of this device">Sign out</button>
+        </span>
       </div>
 
       {showCreate && (

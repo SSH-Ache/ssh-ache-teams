@@ -1,13 +1,16 @@
 // SSH Ache Teams — desktop client for the sshache-sass zero-knowledge SaaS.
 //
-// Signs into the SaaS, unlocks the E2EE identity IN MEMORY (never persisted — the vault
-// needs the password each launch, same as the web app on reload), then decrypts a team's
-// shared SSH connections locally. The server only ever sees ciphertext + wrapped keys.
+// Signs into the SaaS, unlocks the E2EE identity, then decrypts a team's shared SSH
+// connections locally. The server only ever sees ciphertext + wrapped keys.
+//
+// The unlocked session (identity secret + refresh token) is kept in the OS keychain so the
+// app stays signed in across launches — see `saveSession` below. Sign out wipes it.
 //
 // Transport: plain fetch() from the Tauri webview (CORS-free) with a Bearer access token
 // the server returns in the login body for `platform:'desktop'`. Refresh-on-401 keeps the
 // ~15-minute access token fresh via the rotating refresh token (also body-delivered).
 
+import { invoke } from '@tauri-apps/api/core';
 import * as C from './crypto/index.js';
 
 export interface Membership {
@@ -70,6 +73,7 @@ const teamKeys = new Map<string, { tk: Uint8Array; keyGeneration: number }>();
 export const isSignedIn = (): boolean => vault !== null;
 export const getBase = (): string => base;
 export const currentMemberships = (): Membership[] => cachedMemberships;
+export const currentEmail = (): string => (vault ? vault.email : '');
 
 // Command autosuggest is a Teams-app feature. Gate: signed in with at least one membership the
 // server hasn't explicitly denied. Absent flag (old server) counts as enabled, so the feature
@@ -90,6 +94,75 @@ export function signOut(): void {
   accessToken = '';
   refreshToken = '';
   teamKeys.clear();
+  void invoke('secret_delete', { id: SESSION_ID }).catch(() => {});
+}
+
+// ---- Stay signed in across launches --------------------------------------
+// Staying signed in means keeping the unlocked identity somewhere on the device. It goes into the
+// OS keychain — the same store this app already uses for SSH passwords and private keys — and
+// never into localStorage, the state file, or the server. What is stored is the 64-byte identity
+// secret (x25519Priv || ed25519Seed, exactly what device linking transfers) plus the rotating
+// refresh token. Sign out deletes the entry.
+
+const SESSION_ID = 'teams.session';
+
+interface SavedSession {
+  v: 1;
+  userId: string;
+  email: string;
+  identity: string; // b64(x25519Priv[32] || ed25519Seed[32])
+  refreshToken: string;
+}
+
+function identitySecret(id: C.Identity): Uint8Array {
+  const out = new Uint8Array(64);
+  out.set(id.x25519.secretKey, 0);
+  out.set(id.ed25519.secretKey, 32);
+  return out;
+}
+
+// Best-effort: no keychain (browser preview) simply means no persistence.
+async function saveSession(): Promise<void> {
+  if (!vault || !refreshToken) return;
+  const secret = identitySecret(vault.identity);
+  const saved: SavedSession = {
+    v: 1,
+    userId: vault.userId,
+    email: vault.email,
+    identity: C.b64(secret),
+    refreshToken,
+  };
+  C.zero(secret);
+  try {
+    await invoke('secret_set', { id: SESSION_ID, value: JSON.stringify(saved) });
+  } catch {
+    /* no keychain here — the session just won't survive a restart */
+  }
+}
+
+// Called once at launch. Rebuilds the vault from the keychain and trades the stored refresh token
+// for a fresh access token. Returns the memberships when restored, null when there is no usable
+// session (never signed in, signed out, or the server rejected the refresh token).
+export async function restoreSession(): Promise<Membership[] | null> {
+  let saved: SavedSession | null = null;
+  try {
+    const s = await invoke<string>('secret_get', { id: SESSION_ID });
+    saved = s ? (JSON.parse(s) as SavedSession) : null;
+  } catch {
+    return null;
+  }
+  if (!saved || saved.v !== 1 || !saved.identity || !saved.refreshToken) return null;
+  const secret = C.unb64(saved.identity);
+  vault = { userId: saved.userId, email: saved.email, identity: C.identityFromSecret(secret) };
+  refreshToken = saved.refreshToken;
+  accessToken = '';
+  try {
+    await refresh(); // rotates the refresh token; refresh() re-saves the new one
+    return await loadMemberships();
+  } catch {
+    signOut(); // expired / revoked — back to the sign-in screen
+    return null;
+  }
 }
 
 // ---- HTTP ----------------------------------------------------------------
@@ -127,6 +200,7 @@ async function refresh(): Promise<void> {
   }
   accessToken = r.data.accessToken;
   refreshToken = r.data.refreshToken;
+  void saveSession(); // the refresh token rotated — persist the new one or the next launch is dead
 }
 
 // Authenticated request with one transparent refresh-and-retry on 401.
@@ -172,6 +246,7 @@ export async function signIn(
 
   const me = await req('GET', '/v1/auth/me');
   cachedMemberships = me.memberships ?? [];
+  await saveSession();
   return { user: me.user, memberships: cachedMemberships };
 }
 
@@ -277,6 +352,7 @@ export async function claimLink(
   linkEph = null;
   teamKeys.clear();
   const memberships = await loadMemberships();
+  await saveSession();
   return { status: 'linked', memberships };
 }
 

@@ -137,6 +137,116 @@ const UPDATE_REPO = "SSH-Ache/ssh-ache-teams";
 
 // Teams chrome palette — deliberately violet, where the community edition is orange. Applied
 // only to Teams surfaces (badge, plan pill, Teams panel) so user themes still own the terminal.
+// ---- pane layouts --------------------------------------------------------
+// Pre-made pane arrangements for one tab: pick an arrangement instead of splitting by hand.
+// Flex presets (`dir`) keep the draggable gutters between panes; grid presets are the mixed
+// arrangements a single flex row/column can't express.
+// ponytail: grid presets have no drag-resize — the whole point is a fixed, known arrangement.
+const LAYOUTS = [
+  { id: "single", name: "Single", hint: "one full-width terminal", panes: 1, dir: "row" },
+  { id: "cols", name: "Two columns", hint: "side by side", panes: 2, dir: "row" },
+  { id: "rows", name: "Two rows", hint: "stacked", panes: 2, dir: "col" },
+  { id: "main-right", name: "Main + stack", hint: "big left, two right", panes: 3, grid: { cols: "1.45fr 1fr", rows: "1fr 1fr", areas: '"p0 p1" "p0 p2"' } },
+  { id: "main-bottom", name: "Main + two below", hint: "big top, two below", panes: 3, grid: { cols: "1fr 1fr", rows: "1.45fr 1fr", areas: '"p0 p0" "p1 p2"' } },
+  { id: "quad", name: "2 × 2 grid", hint: "four terminals", panes: 4, grid: { cols: "1fr 1fr", rows: "1fr 1fr", areas: '"p0 p1" "p2 p3"' } },
+];
+const layoutById = (id: string) => LAYOUTS.find((l) => l.id === id) || null;
+// What a tab already looks like, for tabs saved before layouts existed (or split by hand).
+const layoutOfTab = (t: any) =>
+  t.layoutId || (t.panes.length === 1 ? "single" : t.panes.length === 2 ? (t.layout === "col" ? "rows" : "cols") : "");
+
+// A workspace is a saved arrangement: one preset + one connection per pane slot. Opening it
+// restores the whole set of terminals in a single tab. Stored in `state.workspaces` and shown on
+// the dashboard next to connections (never a separate page).
+const WS_KIND = "ssh-ache-workspace";
+const WS_KIND_PLAIN = "ssh-ache-workspace-plain";
+// Which half of a pane a dragged tab would land in. Nearest edge wins, so the diagonals of the
+// pane are the boundaries — predictable without a dead zone in the middle.
+const dropZoneAt = (rect: any, x: number, y: number) => {
+  const fx = (x - rect.left) / Math.max(1, rect.width);
+  const fy = (y - rect.top) / Math.max(1, rect.height);
+  const d = [
+    ["left", fx],
+    ["right", 1 - fx],
+    ["top", fy],
+    ["bottom", 1 - fy],
+  ].sort((a: any, b: any) => a[1] - b[1]);
+  return d[0][0] as string;
+};
+const ZONE_LABEL: Record<string, string> = { left: "Split left", right: "Split right", top: "Split up", bottom: "Split down" };
+// Half-pane overlay geometry for the drop preview.
+const ZONE_BOX: Record<string, S> = {
+  left: { left: 0, top: 0, width: "50%", height: "100%" },
+  right: { right: 0, top: 0, width: "50%", height: "100%" },
+  top: { left: 0, top: 0, width: "100%", height: "50%" },
+  bottom: { left: 0, bottom: 0, width: "100%", height: "50%" },
+};
+// The preset a tab should use after a drop, given the resulting pane count and the drop side.
+const presetAfterDrop = (count: number, zone: string) => {
+  const vertical = zone === "top" || zone === "bottom";
+  if (count <= 1) return "single";
+  if (count === 2) return vertical ? "rows" : "cols";
+  if (count === 3) return vertical ? "main-bottom" : "main-right";
+  return "quad";
+};
+
+// Empty pane → pick what runs in it. Local search, keyboard-friendly, no dependencies.
+function PanePicker({ hosts, onPick, onLocal, note }: any) {
+  const [q, setQ] = React.useState("");
+  const needle = q.trim().toLowerCase();
+  const list = (needle
+    ? hosts.filter((h: any) => (h.name + " " + h.user + " " + h.addr + " " + (h.tags || []).join(" ")).toLowerCase().includes(needle))
+    : hosts
+  ).slice(0, 60);
+  return (
+    <div style={css("flex:1;min-height:0;display:flex;flex-direction:column;padding:14px;")}>
+      <div style={css("font-size:12px;color:#b9b9c2;font-weight:600;")}>Pick a connection</div>
+      <div style={css("font-size:10.5px;color:#6a6a74;margin-top:3px;")}>{note || "This pane is empty — choose what runs here."}</div>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search connections…"
+        spellCheck={false}
+        autoFocus
+        style={css("margin-top:11px;flex:none;background:#0e0e12;border:1px solid #20202a;border-radius:7px;color:#ededf0;font:inherit;font-size:12px;padding:8px 10px;outline:none;")}
+      />
+      <div style={css("flex:1;min-height:0;overflow:auto;margin-top:8px;display:flex;flex-direction:column;gap:3px;")}>
+        <Hov onClick={onLocal} s="display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:7px;cursor:pointer;border:1px solid #1c1c24;background:#0e0e12;" h="border-color:rgba(var(--accent-rgb),.5);background:#15151b;">
+          <span style={css("font-size:11px;color:var(--accent);width:14px;text-align:center;flex:none;")}>›_</span>
+          <span style={css("flex:1;min-width:0;font-size:12px;color:#ededf0;")}>Local shell</span>
+        </Hov>
+        {list.map((h: any) => (
+          <Hov key={h.id} onClick={() => onPick(h)} s="display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:7px;cursor:pointer;border:1px solid transparent;" h="border-color:rgba(var(--accent-rgb),.5);background:#15151b;">
+            <span style={css("width:7px;height:7px;border-radius:50%;flex:none;background:#46d9a0;")}></span>
+            <span style={css("flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#ededf0;")}>{h.name}</span>
+            <span style={css("font-size:10.5px;color:#6a6a74;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%;")}>{h.user}@{h.addr}</span>
+          </Hov>
+        ))}
+        {!list.length && <div style={css("font-size:11.5px;color:#54545e;padding:10px 4px;")}>No connections match “{q}”.</div>}
+      </div>
+    </div>
+  );
+}
+
+// Mini preview of an arrangement, drawn from the preset itself so it can't drift from the layout.
+function LayoutThumb({ preset, w = 30 }: any) {
+  const cell: S = { background: "currentColor", opacity: 0.5, borderRadius: "2px" };
+  const cells = Array.from({ length: preset.panes }, (_, i) => i);
+  const box: S = { width: w + "px", height: Math.round(w * 0.72) + "px", gap: "2px", flex: "none" };
+  if (preset.grid) {
+    return (
+      <div style={{ ...box, display: "grid", gridTemplateColumns: preset.grid.cols, gridTemplateRows: preset.grid.rows, gridTemplateAreas: preset.grid.areas }}>
+        {cells.map((i) => (<span key={i} style={{ ...cell, gridArea: "p" + i }}></span>))}
+      </div>
+    );
+  }
+  return (
+    <div style={{ ...box, display: "flex", flexDirection: preset.dir === "col" ? "column" : "row" }}>
+      {cells.map((i) => (<span key={i} style={{ ...cell, flex: 1 }}></span>))}
+    </div>
+  );
+}
+
 const TEAMS_HUE = {
   accent: "#8b7bff",
   accentHi: "#b79bff",
@@ -247,6 +357,14 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.9.0', items: [
+    'Workspaces — arrange a tab into columns, rows, a main+stack split or a 2×2 grid, give each pane a different connection, then save the whole thing. It reopens from the dashboard as one click.',
+    'Team workspaces: build one on shared connections and you can share it with the team — every connection in it is uploaded end-to-end encrypted so teammates can open the same set. Keep it private instead and it stays on this device, under Others.',
+    'Drag a tab onto a pane to fold it in as a split: hover shows exactly where it will land, and dropping offers to save the arrangement.',
+    'Stay signed in — your Teams session now survives closing the app, kept in your OS keychain. Sign out from the sidebar (or the Teams tab) to unlink this device.',
+    'Empty panes show a searchable connection picker, and every pane header has a reopen (↻) button.',
+    'Fixed: buttons, toggles and chips that stayed orange under every theme now follow the active theme accent.',
+  ] },
   { version: '0.8.0', items: [
     'SSH Ache Teams is now its own app. It installs as “SSH Ache Teams” with its own icon and identifier, so it no longer collides with the community edition — you can keep both. Your connections, settings and saved secrets are untouched.',
     'Teams tab rebuilt as “Teams & billing”: your current team, its plan, seats used vs. your plan limits, renewal date, and a side-by-side Free/Pro/Enterprise comparison.',
@@ -485,7 +603,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
                 dec && dec.onRender && dec.onRender((el: any) => {
                   el.style.width = "100%"; el.style.pointerEvents = "none"; el.style.boxSizing = "border-box";
                   el.style.background = "rgba(255,255,255,.05)";
-                  el.style.borderLeft = "3px solid " + (t.color || "#ff7a59");
+                  el.style.borderLeft = "3px solid " + (t.color || "var(--accent)");
                 });
               }
             } catch (_) {}
@@ -734,7 +852,7 @@ function KeyVaultModal({ keys, onAdd, onDelete, onReveal, onClose }: any) {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. work-laptop)" style={inp} />
             <textarea value={keyText} onChange={(e) => setKeyText(e.target.value)} placeholder="Paste private key (PEM / OpenSSH)…" rows={4} spellCheck={false} style={{ ...inp, minHeight: 90, resize: "vertical", fontSize: 11.5, lineHeight: 1.5 }} />
             <input value={passphrase} onChange={(e) => setPassphrase(e.target.value)} type="password" placeholder="Passphrase (optional)" style={inp} />
-            <button onClick={add} disabled={!name.trim() || !keyText.trim()} style={{ alignSelf: "flex-start", background: "#ff7a59", border: "none", borderRadius: 8, color: "#0c0b0a", font: "inherit", fontSize: 12.5, fontWeight: 700, padding: "9px 18px", cursor: "pointer", opacity: (!name.trim() || !keyText.trim()) ? 0.5 : 1 }}>Save key</button>
+            <button onClick={add} disabled={!name.trim() || !keyText.trim()} style={{ alignSelf: "flex-start", background: "var(--accent)", border: "none", borderRadius: 8, color: "var(--accent-ink)", font: "inherit", fontSize: 12.5, fontWeight: 700, padding: "9px 18px", cursor: "pointer", opacity: (!name.trim() || !keyText.trim()) ? 0.5 : 1 }}>Save key</button>
           </div>
         </div>
       </div>
@@ -881,6 +999,12 @@ export default class App extends React.Component<any, any> {
     sidebarOpen: true,
     sftpOpen: false,
     paletteOpen: false,
+    wsMenu: false,       // workspace menu in the tab bar (arrangements + saved workspaces)
+    workspaces: [],      // saved pane arrangements — see WS_KIND
+    wsPrompt: null,      // null | { mode:'create'|'edit', id?, name, folder, tags, tagInput, share? }
+    dragTab: '',         // id of the tab pill being dragged onto a pane
+    paneDrop: null,      // null | { tabId, paneId, zone, blocked }
+    newWsId: null,       // just-saved workspace → highlight its dashboard card
     themesOpen: false,
     aboutOpen: false,
     whatsNewOpen: false,
@@ -894,6 +1018,8 @@ export default class App extends React.Component<any, any> {
     view: 'dashboard',
     teamPresence: {}, // connId -> [{ userId, displayName, email, kind, sessionId }] of teammates active on it (not you)
     activeTeamId: '', // team currently selected in the Teams tab — drives the title-bar team/plan pill
+    teamsRev: 0,      // bumped whenever the Teams session changes (restore/sign out) — re-renders the
+                      // badge + account row and remounts TeamsPanel so it can't show a stale session
     presenceModal: null, // { host, presence } — the "who's online" modal for a team connection card
     broadcast: false,
     search: '',
@@ -965,7 +1091,7 @@ export default class App extends React.Component<any, any> {
     super(props);
     const d = this._loadSync();
     if (d) this.state = { ...this.state, ...this._merge(this.state, d) };
-    this._bumpUid(this.state.hosts);
+    this._bumpUid([...(this.state.hosts || []), ...(this.state.workspaces || [])]);
   }
   _loadSync() {
     try {
@@ -981,13 +1107,15 @@ export default class App extends React.Component<any, any> {
       sidebarOpen: typeof d.sidebarOpen === 'boolean' ? d.sidebarOpen : base.sidebarOpen,
       folderMeta: (d.folderMeta && typeof d.folderMeta === 'object') ? d.folderMeta : base.folderMeta,
       tourSeen: typeof d.tourSeen === 'boolean' ? d.tourSeen : base.tourSeen,
+      workspaces: Array.isArray(d.workspaces) ? d.workspaces : base.workspaces,
     };
   }
   // uid resets to 100 on every launch, but host ids ('x'+uid) are persisted — advance past the
   // hydrated ids so genId() never reissues an existing id. Without this, a new/imported host
   // collides with a saved one and secretSet(id) overwrites the WRONG host's keychain slot.
-  _bumpUid(hosts) {
-    const nums = (hosts || []).map((h) => parseInt(String((h && h.id) || '').replace(/^x/, ''), 10)).filter((n) => Number.isFinite(n));
+  // Workspaces are id-allocated from the same genId() space as hosts, so both must be counted.
+  _bumpUid(items) {
+    const nums = (items || []).map((h) => parseInt(String((h && h.id) || '').replace(/^x/, ''), 10)).filter((n) => Number.isFinite(n));
     if (nums.length) this.uid = Math.max(this.uid, ...nums);
   }
 
@@ -1003,7 +1131,7 @@ export default class App extends React.Component<any, any> {
       else if (meta && k === 'n') { e.preventDefault(); this.openAddHost(); }
       else if (meta && k === '1') { e.preventDefault(); this.setState({ view: 'dashboard' }); }
       else if (meta && k === '2') { e.preventDefault(); this.setState({ view: 'workspace' }); }
-      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false, whatsNewOpen: false, sftpCtx: null }); }
+      else if (k === 'escape') { this.setState({ paletteOpen: false, themesOpen: false, addHostOpen: false, settingsOpen: false, aboutOpen: false, whatsNewOpen: false, sftpCtx: null, wsMenu: false, wsPrompt: null }); }
     };
     window.addEventListener('keydown', this._key);
     // Resolve the real app version, then auto-check for a newer release once.
@@ -1015,7 +1143,7 @@ export default class App extends React.Component<any, any> {
       if (!raw) return;
       let d;
       try { d = JSON.parse(raw); } catch (e) { return; }
-      this.setState(s => this._merge(s, d), () => { this._bumpUid(this.state.hosts); this.maybeRestore(d); });
+      this.setState(s => this._merge(s, d), () => { this._bumpUid([...(this.state.hosts || []), ...(this.state.workspaces || [])]); this.maybeRestore(d); });
     });
     // Idle vault-lock: lock after 15 min of no interaction when enabled + set.
     this._lastActivity = Date.now();
@@ -1034,6 +1162,8 @@ export default class App extends React.Component<any, any> {
       this.refreshMcp();
       import('@tauri-apps/api/event').then(({ listen }) => { listen('mcp-approval', (e) => this.setState({ approvalReq: e.payload })); }).catch(() => {});
     }
+    // Stay signed in across launches: rebuild the Teams session from the OS keychain, then sync.
+    if (isTauri) this.restoreTeamsSession();
     // Team presence: report which team connection each live SSH pane is on, and poll who's active.
     this._hbTimer = setInterval(() => this.presenceHeartbeatTick(), 20000);
     this._presTimer = setInterval(() => this.presencePollTick(), 12000);
@@ -1206,13 +1336,13 @@ export default class App extends React.Component<any, any> {
       this.paletteRef.current.focus();
     }
     const openHosts = (st) => Array.from(new Set(st.tabs.flatMap(t => t.panes.filter(p => p.live).map(p => p.host && p.host.id)).filter(Boolean)));
-    const keys = ['hosts', 'vaultKeys', 'settings', 'themeId', 'sidebarOpen', 'folderMeta', 'tourSeen'];
+    const keys = ['hosts', 'vaultKeys', 'workspaces', 'settings', 'themeId', 'sidebarOpen', 'folderMeta', 'tourSeen'];
     const cur = openHosts(this.state);
     if (keys.some(k => this.state[k] !== prevState[k]) || JSON.stringify(cur) !== JSON.stringify(openHosts(prevState))) {
       saveCfg('state', JSON.stringify({
         hosts: this.state.hosts, vaultKeys: this.state.vaultKeys, settings: this.state.settings,
         themeId: this.state.themeId, sidebarOpen: this.state.sidebarOpen,
-        folderMeta: this.state.folderMeta, tourSeen: this.state.tourSeen, openHosts: cur,
+        folderMeta: this.state.folderMeta, tourSeen: this.state.tourSeen, workspaces: this.state.workspaces, openHosts: cur,
       }));
     }
   }
@@ -1290,33 +1420,347 @@ export default class App extends React.Component<any, any> {
     return { tabs, activeTabId, activePaneId };
   }
 
+  // A sibling pane for `src`. A live session gets its own sessionId, i.e. its own backend SSH
+  // session to the same host; a demo pane just gets a fresh prompt.
+  _newPaneFrom(src) {
+    if (src.live) {
+      const nid = this.genId();
+      return { id: nid, live: true, kind: src.kind || 'ssh', sessionId: nid, host: src.host, secret: src.secret, keyText: src.keyText, jump: src.jump || null, user: src.user, hostName: src.hostName, cwd: src.cwd };
+    }
+    return { id: this.genId(), user: src.user, host: src.host, cwd: src.cwd, input: '', lines: [
+      { t: 'sys', x: 'SSH Ache — new pane' },
+      { t: 'ok', x: '● ' + src.user + '@' + src.host }
+    ] };
+  }
+
   addPane(dir) {
     this.setState(s => {
       const tabs = s.tabs.map(t => {
         if (t.id !== s.activeTabId) return t;
         if (t.panes.length >= 4) return t;
         const src = t.panes.find(p => p.id === s.activePaneId) || t.panes[0];
-        let np;
-        if (src.live) {
-          // Splitting a live session opens a second, independent shell to the
-          // same host (its own sessionId → its own backend SSH session).
-          const nid = this.genId();
-          np = { id: nid, live: true, kind: src.kind || 'ssh', sessionId: nid, host: src.host, secret: src.secret, keyText: src.keyText, jump: src.jump || null, user: src.user, hostName: src.hostName, cwd: src.cwd };
-        } else {
-          np = { id: this.genId(), user: src.user, host: src.host, cwd: src.cwd, input: '', lines: [
-            { t: 'sys', x: 'SSH Ache — new pane' },
-            { t: 'ok', x: '● ' + src.user + '@' + src.host }
-          ] };
-        }
-        const panes = [...t.panes, np];
+        const panes = [...t.panes, this._newPaneFrom(src)];
         const sizes = panes.map(() => 100 / panes.length);
-        return { ...t, layout:dir, panes, sizes };
+        // Hand-splitting leaves the grid presets: the tab goes back to a plain row/column.
+        return { ...t, layout:dir, layoutId:'', panes, sizes };
       });
       return { tabs };
     });
   }
   splitRight = () => this.addPane('row');
   splitDown = () => this.addPane('col');
+
+  // Reshape the active tab into a pre-made arrangement. Panes the preset adds start EMPTY so each
+  // one can hold a different connection (that is the point of a workspace) — ⌘D/split still clones
+  // the current host. Trailing extras are closed with their sessions.
+  applyLayout(id) {
+    const preset = layoutById(id);
+    if (!preset) return;
+    let dropped = 0;
+    this.setState(s => {
+      const tabs = s.tabs.map(t => {
+        if (t.id !== s.activeTabId) return t;
+        dropped = Math.max(0, t.panes.length - preset.panes);
+        const panes = t.panes.slice(0, preset.panes);
+        while (panes.length < preset.panes) panes.push({ id: this.genId(), empty: true });
+        return { ...t, panes, layoutId: preset.id, layout: preset.dir || 'row', sizes: panes.map(() => 100 / panes.length) };
+      });
+      const at = tabs.find(t => t.id === s.activeTabId);
+      const keep = at && at.panes.some(p => p.id === s.activePaneId);
+      return { tabs, wsMenu: false, activePaneId: keep ? s.activePaneId : (at ? at.panes[0].id : s.activePaneId) };
+    }, () => {
+      if (dropped) this.pushToast({ type: 'info', title: preset.name, msg: 'Closed ' + dropped + ' pane' + (dropped === 1 ? '' : 's') });
+    });
+  }
+
+  // ---- workspaces: a saved arrangement of several connections in one tab ----
+
+  // A slot remembers the host id AND a descriptor, so a workspace still resolves after an
+  // export/import (new ids) or, in the Teams build, on another device (shared connection id).
+  _slotFromPane(p) {
+    if (!p || p.empty) return null;
+    if (p.kind === 'local') return { local: true };
+    const h = p.host || {};
+    return { hostId: h.id || '', connId: h.connId || '', name: h.name || '', addr: h.addr || '', user: h.user || '', port: h.port || '' };
+  }
+  _hostForSlot(slot) {
+    if (!slot || slot.local) return null;
+    const hs = this.state.hosts;
+    return (slot.hostId && hs.find(h => h.id === slot.hostId))
+      || (slot.connId && hs.find(h => h.connId === slot.connId))
+      || (slot.addr && hs.find(h => h.addr === slot.addr && (h.user || '') === (slot.user || '') && String(h.port) === String(slot.port)))
+      || (slot.name && hs.find(h => h.name === slot.name))
+      || null;
+  }
+  // Everything a live pane needs to talk to `host`, with the secret read back from the keychain.
+  async _paneForHost(host) {
+    const pid = this.genId();
+    const saved = (await secretGet(host.id)) || {};
+    const jump = await this.buildJump(host.jumpHost, host.id);
+    const secret = (host.auth === 'key') ? (saved.passphrase || '') : (saved.password || '');
+    return { id: pid, live: true, kind: 'ssh', sessionId: pid, host, secret, keyText: saved.keyText || '', jump, user: host.user, hostName: host.name, cwd: '~' };
+  }
+  _localPane() {
+    const pid = this.genId();
+    return { id: pid, live: true, kind: 'local', sessionId: pid, host: { addr: 'localhost', user: 'you' }, user: 'you', hostName: 'localhost', cwd: '~' };
+  }
+
+  // Open a saved workspace: one tab, every slot connected at once. Slots whose connection is gone
+  // come back as empty panes with a picker rather than silently vanishing.
+  async openWorkspace(ws) {
+    const preset = layoutById(ws.layoutId) || LAYOUTS[0];
+    const slots = (ws.slots || []).slice(0, preset.panes);
+    while (slots.length < preset.panes) slots.push(null);
+    let missing = 0;
+    const panes = [];
+    for (const slot of slots) {
+      if (slot && slot.local) { panes.push(this._localPane()); continue; }
+      const host = this._hostForSlot(slot);
+      if (!host) { if (slot) missing += 1; panes.push({ id: this.genId(), empty: true, missing: !!slot }); continue; }
+      panes.push(await this._paneForHost(host));
+    }
+    const id = this.genId();
+    const first = panes.find(p => p.live && p.kind === 'ssh');
+    const tab = {
+      id, title: ws.name, host: ws.name, user: first ? first.user : 'you', addr: first ? (first.host.addr || '') : 'workspace',
+      wsId: ws.id, layout: preset.dir || 'row', layoutId: preset.id, sizes: panes.map(() => 100 / panes.length), panes,
+    };
+    this.setState(s => ({
+      tabs: [...s.tabs, tab], activeTabId: id, activePaneId: panes[0].id, view: 'workspace',
+      wsMenu: false, paletteOpen: false,
+      workspaces: s.workspaces.map(w => w.id === ws.id ? { ...w, lastUsed: 'just now' } : w),
+    }));
+    if (missing) this.pushToast({ type: 'info', title: ws.name, msg: missing + ' connection' + (missing === 1 ? '' : 's') + ' no longer exist — pick a replacement' });
+  }
+
+  // Attach a connection (or a local shell) to an empty pane.
+  async fillPane(tabId, paneId, host) {
+    const pane = host ? await this._paneForHost(host) : this._localPane();
+    this.setState(s => ({
+      tabs: s.tabs.map(t => t.id !== tabId ? t : { ...t, panes: t.panes.map(p => p.id === paneId ? { ...pane, id: p.id } : p) }),
+      activePaneId: paneId,
+    }));
+  }
+  // Reopen a pane's session (same host, fresh shell). Remounts TermPane via a new sessionId.
+  reconnectPane(tabId, paneId) {
+    this.setState(s => ({
+      tabs: s.tabs.map(t => t.id !== tabId ? t : { ...t, panes: t.panes.map(p => {
+        if (p.id !== paneId || !p.live) return p;
+        return { ...p, sessionId: this.genId(), connected: false };
+      }) }),
+    }));
+  }
+
+  // Drag a tab onto a pane → its panes move in beside that pane. Moved panes get fresh session ids
+  // because React remounts them under the new tab (the old sessions close on unmount).
+  mergeTabIntoPane(srcTabId, targetTabId, targetPaneId, zone) {
+    const s = this.state;
+    const src = s.tabs.find(t => t.id === srcTabId);
+    const target = s.tabs.find(t => t.id === targetTabId);
+    if (!src || !target || src.id === target.id) return;
+    const incoming = src.panes.map(p => (p.live ? { ...p, sessionId: this.genId(), connected: false } : p));
+    if (target.panes.length + incoming.length > 4) {
+      this.pushToast({ type: 'info', title: 'Too many panes', msg: 'A tab holds at most 4 panes' });
+      return;
+    }
+    const at = target.panes.findIndex(p => p.id === targetPaneId);
+    const idx = (zone === 'left' || zone === 'top') ? Math.max(0, at) : at + 1;
+    const panes = [...target.panes.slice(0, idx), ...incoming, ...target.panes.slice(idx)];
+    const presetId = presetAfterDrop(panes.length, zone);
+    const preset = layoutById(presetId) || LAYOUTS[0];
+    this.setState(st => ({
+      tabs: st.tabs
+        .filter(t => t.id !== srcTabId)
+        .map(t => t.id !== targetTabId ? t : { ...t, panes, layoutId: preset.id, layout: preset.dir || 'row', sizes: panes.map(() => 100 / panes.length), wsId: '' }),
+      activeTabId: targetTabId,
+      activePaneId: incoming[0].id,
+      dragTab: '', paneDrop: null,
+    }), () => {
+      // The arrangement is now worth keeping — offer to save it, skippable.
+      this.openWsPrompt();
+    });
+  }
+
+  // ---- workspace save / edit modal ----
+  _wsDefaultName(tab) {
+    const names = (tab ? tab.panes : []).map(p => (p.empty ? '' : (p.kind === 'local' ? 'local' : (p.host && p.host.name) || ''))).filter(Boolean);
+    if (!names.length) return 'Workspace';
+    return names.length === 1 ? names[0] : names[0] + ' +' + (names.length - 1);
+  }
+  // No arg → save the active tab as a new workspace. With one → edit that saved workspace.
+  openWsPrompt(ws) {
+    if (ws) {
+      this.setState({ wsPrompt: { mode: 'edit', id: ws.id, name: ws.name, folder: ws.folder || '', tags: [...(ws.tags || [])], tagInput: '' }, wsMenu: false });
+      return;
+    }
+    const tab = this.state.tabs.find(t => t.id === this.state.activeTabId);
+    if (!tab) return;
+    const filled = tab.panes.filter(p => !p.empty).length;
+    if (!filled) { this.pushToast({ type: 'info', title: 'Nothing to save', msg: 'Connect at least one pane first' }); return; }
+    const existing = tab.wsId ? this.state.workspaces.find(w => w.id === tab.wsId) : null;
+    // Built on team connections? Then the user chooses: a team workspace everyone can open, or a
+    // private one that stays on this device (in "Others").
+    const cands = this._wsTeamCandidates(tab);
+    const alreadyShared = !!(existing && existing.teamId);
+    const shareTeamId = alreadyShared ? existing.teamId : (cands.length ? cands[0].teamId : '');
+    const share = cands.length ? (alreadyShared || !existing ? 'team' : 'private') : '';
+    const teamNameOf = (id) => (cands.find(m => m.teamId === id) || {}).teamName || 'Shared';
+    this.setState({
+      wsMenu: false,
+      wsPrompt: {
+        mode: 'create', id: existing ? existing.id : '', tabId: tab.id,
+        name: existing ? existing.name : this._wsDefaultName(tab),
+        folder: existing ? (existing.folder || '')
+          : (share === 'team' && shareTeamId) ? 'Team · ' + teamNameOf(shareTeamId)
+          : (typeof this.state.activeFolder === 'string' && this.state.activeFolder !== 'all' ? this.state.activeFolder : ''),
+        tags: existing ? [...(existing.tags || [])] : [], tagInput: '',
+        panes: tab.panes.map(p => (p.empty ? 'Empty' : (p.kind === 'local' ? 'Local shell' : (p.host && p.host.name) || 'Connection'))),
+        teamOptions: cands.map(m => ({ teamId: m.teamId, teamName: m.teamName || 'Shared' })),
+        share, shareTeamId, alreadyShared,
+      },
+    });
+  }
+  // Which of your teams this arrangement touches (i.e. a pane sitting on a shared connection).
+  // Only then is "share this workspace" on the table.
+  _wsTeamCandidates(tab) {
+    const ids = new Set();
+    for (const p of (tab ? tab.panes : [])) {
+      const h = (!p.empty && p.kind !== 'local') ? p.host : null;
+      if (h && h.teamId) ids.add(h.teamId);
+    }
+    return teams.currentMemberships().filter((m) => ids.has(m.teamId));
+  }
+  // Turn a saved workspace into a TEAM workspace: every connection it opens is uploaded to the
+  // team first (otherwise teammates would open empty panes), then the arrangement itself is stored
+  // as a team record so it syncs to everyone.
+  async _shareWorkspace(wsId, teamId) {
+    const ws = this.state.workspaces.find((w) => w.id === wsId);
+    if (!ws) return;
+    try {
+      for (const slot of (ws.slots || [])) {
+        if (!slot || slot.local) continue;
+        const h = this._hostForSlot(slot);
+        if (!h || h.teamId) continue;
+        await this.shareHostToTeam(h.id, teamId);
+      }
+      // shareHostToTeam stamps teamId/connId onto the hosts — re-read the slots so the shared copy
+      // references cloud connection ids, which is what resolves on a teammate's machine.
+      const slots = (ws.slots || []).map((slot) => {
+        if (!slot || slot.local) return slot;
+        const h = this._hostForSlot(slot);
+        return h ? { hostId: h.id, connId: h.connId || '', name: h.name, addr: h.addr, user: h.user, port: h.port } : slot;
+      });
+      const meta = {
+        schema: 1, kind: 'workspace', name: ws.name, host: 'workspace', port: 22, user: '', auth: 'agent',
+        workspace: {
+          name: ws.name, layoutId: ws.layoutId, tags: ws.tags || [],
+          slots: slots.map((sl) => (sl && sl.local ? { local: true } : (sl ? { connId: sl.connId || '', name: sl.name || '' } : null))),
+        },
+      };
+      const connId = await teams.createConnection(teamId, meta, { schema: 1, password: null, passphrase: null, keyText: null });
+      const m = teams.currentMemberships().find((x) => x.teamId === teamId);
+      this.setState((s) => ({
+        workspaces: s.workspaces.map((w) => (w.id === wsId ? { ...w, teamId, connId, slots, folder: 'Team · ' + ((m && m.teamName) || 'Shared') } : w)),
+      }));
+      this.pushToast({ type: 'ok', title: 'Team workspace', msg: ws.name + ' — its connections are now available to every member' });
+    } catch (e) {
+      this.pushToast({ type: 'err', title: 'Share failed', msg: String(e) });
+    }
+  }
+  cancelWsPrompt = () => this.setState({ wsPrompt: null });
+  setWsField(key, val) { this.setState(s => ({ wsPrompt: s.wsPrompt ? { ...s.wsPrompt, [key]: val } : null })); }
+  addWsTag() {
+    this.setState(s => {
+      if (!s.wsPrompt) return {};
+      const v = s.wsPrompt.tagInput.trim().replace(/^#/, '');
+      if (!v || s.wsPrompt.tags.includes(v)) return { wsPrompt: { ...s.wsPrompt, tagInput: '' } };
+      return { wsPrompt: { ...s.wsPrompt, tags: [...s.wsPrompt.tags, v], tagInput: '' } };
+    });
+  }
+  removeWsTag(t) { this.setState(s => ({ wsPrompt: s.wsPrompt ? { ...s.wsPrompt, tags: s.wsPrompt.tags.filter(x => x !== t) } : null })); }
+  submitWsPrompt() {
+    const p = this.state.wsPrompt;
+    if (!p) return;
+    const name = (p.name || '').trim();
+    if (!name) { this.pushToast({ type: 'err', title: 'Name required', msg: 'Give the workspace a name' }); return; }
+    const folder = (p.folder || '').trim() || 'Workspaces';
+    if (p.mode === 'edit') {
+      this.setState(s => ({ workspaces: s.workspaces.map(w => w.id === p.id ? { ...w, name, folder, tags: p.tags } : w), wsPrompt: null, newWsId: p.id }));
+      this.pushToast({ type: 'ok', title: 'Workspace updated', msg: name });
+      setTimeout(() => this.setState(s => (s.newWsId === p.id ? { newWsId: null } : {})), 2200);
+      return;
+    }
+    const tab = this.state.tabs.find(t => t.id === p.tabId) || this.state.tabs.find(t => t.id === this.state.activeTabId);
+    if (!tab) { this.setState({ wsPrompt: null }); return; }
+    const slots = tab.panes.map(x => this._slotFromPane(x));
+    const id = p.id || this.genId();
+    const prev = this.state.workspaces.find(w => w.id === id);
+    // "Keep private" on a team-connection workspace parks it in Others — it stays on this device.
+    const wantsShare = p.share === 'team' && !!p.shareTeamId;
+    const ws = {
+      id, name, tags: p.tags, layoutId: layoutOfTab(tab) || 'single', slots,
+      folder: (!wantsShare && p.teamOptions && p.teamOptions.length && p.share === 'private' && !p.folder) ? 'Others' : folder,
+      favorite: !!(prev || {}).favorite, lastUsed: 'just now',
+      teamId: wantsShare ? p.shareTeamId : undefined, connId: wantsShare ? (prev || {}).connId : undefined,
+    };
+    this.setState(s => ({
+      workspaces: s.workspaces.some(w => w.id === id) ? s.workspaces.map(w => w.id === id ? { ...w, ...ws } : w) : [...s.workspaces, ws],
+      tabs: s.tabs.map(t => t.id === tab.id ? { ...t, wsId: id, title: name } : t),
+      wsPrompt: null, newWsId: id,
+    }), () => {
+      if (wantsShare && !(prev && prev.connId)) void this._shareWorkspace(id, p.shareTeamId);
+    });
+    this.pushToast({ type: 'ok', title: p.id ? 'Workspace updated' : 'Workspace saved', msg: name + ' · ' + slots.filter(Boolean).length + ' connection' + (slots.filter(Boolean).length === 1 ? '' : 's') });
+    setTimeout(() => this.setState(s => (s.newWsId === id ? { newWsId: null } : {})), 2200);
+  }
+  toggleWsFav(id) { this.setState(s => ({ workspaces: s.workspaces.map(w => w.id === id ? { ...w, favorite: !w.favorite } : w) })); }
+  deleteWorkspace(id) {
+    const ws = this.state.workspaces.find(w => w.id === id);
+    this.setState(s => ({ workspaces: s.workspaces.filter(w => w.id !== id), wsPrompt: null, tabs: s.tabs.map(t => t.wsId === id ? { ...t, wsId: '' } : t) }));
+    if (!ws) return;
+    // A shared workspace lives in the team, so it comes back on the next sync — removing it for
+    // everyone is a team action, not a local delete.
+    if (ws.teamId) this.pushToast({ type: 'info', title: 'Removed here', msg: ws.name + ' is a team workspace — it returns on the next sync until an admin removes it for the team' });
+    else this.pushToast({ type: 'ok', title: 'Workspace deleted', msg: ws.name });
+  }
+
+  // Export/import mirrors single-connection export, but carries the member connections too so the
+  // workspace is usable on the other machine. Secrets only travel when a password is set.
+  async exportWorkspace(ws) {
+    if (!isTauri) { this.pushToast({ type: 'info', title: 'Export', msg: 'Available in the desktop app.' }); return; }
+    this.setState({ ioPrompt: { mode: 'exportWs', value: '', wsId: ws.id, wsName: ws.name, optional: true } });
+  }
+  async _importWorkspaceBundle(bundle) {
+    const ws = bundle.workspace;
+    if (!ws || !Array.isArray(ws.slots)) throw new Error('invalid');
+    // Reuse a matching connection when there is one; otherwise create it (with its secret, if the
+    // file carried one).
+    const idMap = {};
+    for (const inc of (bundle.hosts || [])) {
+      const h = inc.host || inc;
+      if (!h || !h.addr) continue;
+      const match = this.state.hosts.find(x => x.addr === h.addr && (x.user || '') === (h.user || '') && String(x.port) === String(h.port));
+      if (match) { idMap[h.id] = match.id; continue; }
+      const nid = this.genId();
+      idMap[h.id] = nid;
+      const host = { ...h, id: nid, teamId: undefined, connId: undefined, connVersion: undefined, online: true, lastUsed: 'never' };
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(res => this.setState(s => ({ hosts: [...s.hosts, host] }), res));
+      if (inc.secret) secretSet(nid, inc.secret);
+    }
+    const id = this.genId();
+    const slots = ws.slots.map(sl => (sl && !sl.local && sl.hostId && idMap[sl.hostId]) ? { ...sl, hostId: idMap[sl.hostId] } : sl);
+    const imported = {
+      ...ws, id, slots, favorite: false, lastUsed: 'never',
+      teamId: undefined, connId: undefined,
+      name: this.state.workspaces.some(w => w.name === ws.name) ? ws.name + ' (imported)' : ws.name,
+      folder: ws.folder || 'Workspaces',
+      tags: Array.isArray(ws.tags) ? ws.tags : [],
+    };
+    this.setState(s => ({ workspaces: [...s.workspaces, imported], view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], newWsId: id }));
+    this.pushToast({ type: 'ok', title: 'Workspace imported', msg: imported.name });
+    setTimeout(() => this.setState(s => (s.newWsId === id ? { newWsId: null } : {})), 2200);
+  }
 
   closePaneById(id) {
     this.setState(s => {
@@ -1488,6 +1932,25 @@ export default class App extends React.Component<any, any> {
     }
   }
   handlePaneClosed(tab, paneId) { this.setPaneConnected(tab.id, paneId, false); }
+
+  // ---- Teams session ----
+  // The session survives app restarts: teams/client.ts keeps the unlocked identity + refresh token
+  // in the OS keychain. Restoring is best-effort — a revoked/expired token just lands on sign-in.
+  restoreTeamsSession() {
+    teams.restoreSession()
+      .then((ms) => {
+        if (!ms) return;
+        this.setState(s => ({ teamsRev: s.teamsRev + 1 }), () => { void this.syncAllTeams(); });
+      })
+      .catch(() => {});
+  }
+  // Sign the Teams account out of this device: drops the in-memory vault AND the keychain entry.
+  // Already-synced connections stay in the local vault — signing out is not a data wipe.
+  signOutTeams() {
+    teams.signOut();
+    this.setState(s => ({ activeTeamId: '', teamPresence: {}, teamsRev: s.teamsRev + 1 }));
+    this.pushToast({ type: 'ok', title: 'Signed out', msg: 'This device is no longer linked to your Teams account' });
+  }
 
   // Title-bar team/plan pill. Reads the teams client module directly (it owns the session); the
   // `activeTeamId` state is only the selection, pushed up by TeamsPanel.
@@ -1813,7 +2276,7 @@ export default class App extends React.Component<any, any> {
   async importHostFile() {
     if (!isTauri) { this.pushToast({ type: 'info', title: 'Import', msg: 'Available in the desktop app.' }); return; }
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const path = await open({ multiple: false, filters: [{ name: 'SSH Ache connection', extensions: ['json'] }] });
+    const path = await open({ multiple: false, filters: [{ name: 'SSH Ache connection or workspace', extensions: ['json'] }] });
     if (!path || typeof path !== 'string') return;
     this.setState({ ioPrompt: { mode: 'import1', value: '', path, optional: true } });
   }
@@ -1915,6 +2378,15 @@ export default class App extends React.Component<any, any> {
     const ids = new Set(conns.map((c) => c.id));
     let changed = 0;
     for (const c of conns) {
+      // A team WORKSPACE is stored in the same place as connections, tagged by its meta. It has no
+      // secret to reveal — it is just an arrangement pointing at other shared connections.
+      if (c.meta && c.meta.kind === 'workspace') {
+        const cur = this.state.workspaces.find((w) => w.connId === c.id);
+        if (!force && cur && cur.connVersion === c.version) continue;
+        this._upsertTeamWorkspace(teamId, folder, c);
+        changed += 1;
+        continue;
+      }
       const existing = this.state.hosts.find((h) => h.connId === c.id);
       if (!force && existing && existing.connVersion === c.version) continue; // already current
       let secret = null;
@@ -1922,9 +2394,29 @@ export default class App extends React.Component<any, any> {
       this._upsertTeamHost(teamId, folder, c, secret);
       changed += 1;
     }
-    // Prune connections that were removed from the team.
-    this.setState((s) => ({ hosts: s.hosts.filter((h) => h.teamId !== teamId || ids.has(h.connId)) }));
+    // Prune connections (and team workspaces) that were removed from the team.
+    this.setState((s) => ({
+      hosts: s.hosts.filter((h) => h.teamId !== teamId || ids.has(h.connId)),
+      workspaces: s.workspaces.filter((w) => w.teamId !== teamId || ids.has(w.connId)),
+    }));
     return changed;
+  }
+  // Materialise a teammate's shared workspace locally. Slots reference cloud connection ids, which
+  // _hostForSlot resolves against the connections this device has synced.
+  _upsertTeamWorkspace(teamId, folder, c) {
+    const w = (c.meta && c.meta.workspace) || {};
+    const existing = this.state.workspaces.find((x) => x.connId === c.id);
+    const id = existing ? existing.id : this.genId();
+    const ws = {
+      id, name: w.name || c.meta.name || 'Workspace', folder,
+      tags: Array.isArray(w.tags) ? w.tags : [],
+      layoutId: w.layoutId || 'single',
+      slots: Array.isArray(w.slots) ? w.slots : [],
+      favorite: existing ? !!existing.favorite : false,
+      lastUsed: existing ? existing.lastUsed : 'never',
+      teamId, connId: c.id, connVersion: c.version,
+    };
+    this.setState((s) => ({ workspaces: existing ? s.workspaces.map((x) => (x.id === id ? ws : x)) : [...s.workspaces, ws] }));
   }
   _upsertTeamHost(teamId, folder, c, secret) {
     const meta = c.meta;
@@ -2210,9 +2702,12 @@ export default class App extends React.Component<any, any> {
   }
   deleteHost(id) {
     const h = this.state.hosts.find(x => x.id === id);
+    // Workspaces that opened this connection keep the slot: it shows up as a 'missing' pane with a
+    // picker rather than silently disappearing, so say so instead of leaving them to find out.
+    const usedBy = this.state.workspaces.filter(w => (w.slots || []).some(sl => sl && !sl.local && sl.hostId === id)).length;
     this.setState(s => ({ hosts: s.hosts.filter(x => x.id !== id), addHostOpen: false, editingId: null }));
     secretDelete(id);
-    this.pushToast({ type:'err', title:'Host removed', msg: h ? h.name : '' });
+    this.pushToast({ type:'err', title:'Host removed', msg: (h ? h.name : '') + (usedBy ? ' · used by ' + usedBy + ' workspace' + (usedBy === 1 ? '' : 's') : '') });
   }
 
   openSettings() { this.setState({ settingsOpen: true, addHostOpen: false, paletteOpen: false }); }
@@ -2242,14 +2737,15 @@ export default class App extends React.Component<any, any> {
     if (!fe) return;
     const oldName = fe.name, newName = (fe.newName || '').trim() || oldName;
     this.setState(s => {
-      let hosts = s.hosts, folderMeta = { ...s.folderMeta }, activeFolder = s.activeFolder;
+      let hosts = s.hosts, workspaces = s.workspaces, folderMeta = { ...s.folderMeta }, activeFolder = s.activeFolder;
       if (newName !== oldName) {
         hosts = s.hosts.map(h => h.folder === oldName ? { ...h, folder: newName } : h);
+        workspaces = s.workspaces.map(w => w.folder === oldName ? { ...w, folder: newName } : w);
         delete folderMeta[oldName];
         if (activeFolder === oldName) activeFolder = newName;
       }
       folderMeta[newName] = { color: fe.color || '', favorite: !!fe.favorite };
-      return { hosts, folderMeta, folderEdit: null, activeFolder };
+      return { hosts, workspaces, folderMeta, folderEdit: null, activeFolder };
     });
     this.pushToast({ type: 'ok', title: 'Folder updated', msg: newName });
   }
@@ -2267,8 +2763,60 @@ export default class App extends React.Component<any, any> {
       const flex = sizes[i] || (100 / tab.panes.length);
       const active = p.id === s.activePaneId && tab.id === s.activeTabId;
       const tlayout = tab.layout;
+      // Grid presets place panes by area and have no drag gutters; flex presets size by flex-grow.
+      const grid = (layoutById(tab.layoutId) || {}).grid;
+      const place = grid ? { gridArea: 'p' + i } : { flexGrow: flex, flexShrink: 1, flexBasis: 0 };
+      // Drop preview: which half of THIS pane a dragged tab would land in.
+      const drop = (s.paneDrop && s.paneDrop.paneId === p.id && s.paneDrop.tabId === tab.id) ? s.paneDrop : null;
       return {
-        id: p.id, idx: i, notFirst: i > 0, active,
+        id: p.id, idx: i, notFirst: i > 0 && !grid, active,
+        empty: !!p.empty, missing: !!p.missing,
+        pickerHosts: s.hosts,
+        onFillHost: (h) => { void this.fillPane(tab.id, p.id, h); },
+        onFillLocal: () => { void this.fillPane(tab.id, p.id, null); },
+        onReconnect: (e) => { e.stopPropagation(); this.reconnectPane(tab.id, p.id); },
+        // --- tab → pane drag & drop ---
+        dropZone: drop ? drop.zone : '',
+        dropBlocked: drop ? !!drop.blocked : false,
+        dropLabel: drop ? (drop.blocked ? drop.blocked : ZONE_LABEL[drop.zone]) : '',
+        dropStyle: drop ? {
+          position: 'absolute', zIndex: 7, pointerEvents: 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRadius: '5px', transition: 'all .08s ease',
+          background: drop.blocked ? 'rgba(255,107,120,.14)' : 'rgba(var(--accent-rgb),.16)',
+          border: '2px dashed ' + (drop.blocked ? 'rgba(255,107,120,.7)' : 'rgba(var(--accent-rgb),.75)'),
+          ...(ZONE_BOX[drop.zone] || ZONE_BOX.right),
+        } : null,
+        // Read the drag from this.state, not the render closure: a drag starts AFTER these handlers
+        // were built, so the captured snapshot would still say "nothing is being dragged".
+        onPaneDragOver: (e) => {
+          const st = this.state;
+          if (!st.dragTab) return;
+          e.preventDefault();
+          e.stopPropagation();
+          try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+          const src = st.tabs.find(t => t.id === st.dragTab);
+          const self = st.tabs.find(t => t.id === tab.id) || tab;
+          const zone = dropZoneAt(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+          const blocked = st.dragTab === tab.id
+            ? 'Already in this tab'
+            : (src && self.panes.length + src.panes.length > 4) ? 'Max 4 panes' : '';
+          const cur = st.paneDrop;
+          if (cur && cur.paneId === p.id && cur.tabId === tab.id && cur.zone === zone && (cur.blocked || '') === blocked) return;
+          this.setState({ paneDrop: { tabId: tab.id, paneId: p.id, zone, blocked } });
+        },
+        onPaneDrop: (e) => {
+          const st = this.state;
+          if (!st.dragTab) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const zone = dropZoneAt(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+          const srcId = st.dragTab;
+          const blocked = st.paneDrop && st.paneDrop.blocked;
+          this.setState({ paneDrop: null, dragTab: '' });
+          if (blocked) { this.pushToast({ type: 'info', title: 'Not dropped', msg: blocked === 'Max 4 panes' ? 'A tab holds at most 4 panes' : 'That tab is already here' }); return; }
+          this.mergeTabIntoPane(srcId, tab.id, p.id, zone);
+        },
         cwd: p.cwd, input: p.input,
         hostLabel: p.live ? (p.user + '@' + (p.host && p.host.addr ? p.host.addr : (p.hostName || ''))) : (p.user + '@' + p.host),
         promptUser: p.user + '@' + p.host,
@@ -2286,12 +2834,12 @@ export default class App extends React.Component<any, any> {
         onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
         onCwd: (path) => this.setPaneCwd(p.sessionId, path),
         onTrigger: this.handleTrigger,
-        boxStyle: { position:'relative', flexGrow:flex, flexShrink:1, flexBasis:0, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(255,122,89,.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.12)' : 'none', transition:'border-color .15s ease' },
+        boxStyle: { position:'relative', ...place, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(var(--accent-rgb),.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(var(--accent-rgb),.12)' : 'none', transition:'border-color .15s ease' },
         resizerStyle: tlayout === 'row'
           ? { flex:'none', alignSelf:'stretch', width:'10px', cursor:'col-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 }
           : { flex:'none', alignSelf:'stretch', height:'10px', cursor:'row-resize', display:'flex', alignItems:'center', justifyContent:'center', zIndex:6 },
         resizerBar: tlayout === 'row' ? { width:'2px', height:'34px' } : { height:'2px', width:'34px' },
-        headStyle: { display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px', borderBottom:'1px solid ' + (active ? 'rgba(255,122,89,.16)' : '#16161c'), background:'rgba(0,0,0,.2)', flex:'none' },
+        headStyle: { display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px', borderBottom:'1px solid ' + (active ? 'rgba(var(--accent-rgb),.16)' : '#16161c'), background:'rgba(0,0,0,.2)', flex:'none' },
         termStyle: { flex:1, overflow:'auto', padding:'10px 13px 13px', color:theme.fg, caretColor:theme.accent, fontSize:s.settings.fontSize + 'px', lineHeight:'1.55', background:theme.bg },
         lines: (p.lines || []).map(l => ({ display: (l.x === '' ? ' ' : l.x), color: lineColor(l.t) })),
         onActivate: () => { this.setState({ activePaneId: p.id }); const el = this.inputRefs[p.id]; if (el) setTimeout(() => el.focus(), 0); },
@@ -2305,12 +2853,22 @@ export default class App extends React.Component<any, any> {
     const panes = activeTab ? mkPanes(activeTab) : [];
     // Every tab's panes stay mounted; inactive tabs are hidden so their SSH/PTY
     // sessions (and xterm scrollback) survive a tab switch — only closeTab kills them.
+    const wrapStyleOf = (t) => {
+      const g = (layoutById(t.layoutId) || {}).grid;
+      return g
+        ? { flex:1, minWidth:0, minHeight:0, display:'grid', gridTemplateColumns:g.cols, gridTemplateRows:g.rows, gridTemplateAreas:g.areas, gap:'2px' }
+        : { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: t.layout === 'row' ? 'row' : 'column', gap:'2px' };
+    };
     const tabPanes = s.tabs.map(t => ({
       id: t.id, active: t.id === s.activeTabId,
-      wrapStyle: t.id === s.activeTabId
-        ? { flex:1, minWidth:0, minHeight:0, display:'flex', flexDirection: t.layout === 'row' ? 'row' : 'column', gap:'2px' }
-        : { display:'none' },
+      wrapStyle: t.id === s.activeTabId ? wrapStyleOf(t) : { display:'none' },
       panes: mkPanes(t),
+    }));
+    // Tab-bar arrangement picker.
+    const activeLayoutId = activeTab ? layoutOfTab(activeTab) : '';
+    const layoutOptions = LAYOUTS.map(l => ({
+      id: l.id, name: l.name, hint: l.hint, preset: l, active: l.id === activeLayoutId,
+      onPick: () => this.applyLayout(l.id),
     }));
 
     const tabs = s.tabs.map(t => {
@@ -2318,15 +2876,28 @@ export default class App extends React.Component<any, any> {
       const conn = t.panes.some(p => p.live && p.connected);             // any live pane connected → dot lit
       const isSpectate = !!t.spectate;                                    // view-mode tab (watching a teammate)
       const isTeam = !isSpectate && t.panes.some(p => p.host && p.host.teamId); // team connection tab
-      const ac = isSpectate ? '168,112,255' : isTeam ? '70,217,160' : '255,122,89'; // purple / green / orange
-      const acHex = isSpectate ? '#a970ff' : isTeam ? '#46d9a0' : '#ff7a59';
+      const ac = isSpectate ? '168,112,255' : isTeam ? '70,217,160' : 'var(--accent-rgb)'; // purple / green / theme accent
+      const acHex = isSpectate ? '#a970ff' : isTeam ? '#46d9a0' : 'var(--accent)';
       const themed = isTeam || isSpectate;
       return {
       id: t.id, title: t.title, active: sel,
       style: { display:'flex', alignItems:'center', gap:'8px', padding:'0 8px 0 11px', height:'30px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: sel ? '#ededf0' : '#8b8b95', background: sel ? '#15151b' : (themed ? 'rgba(' + ac + ',.06)' : 'transparent'), border:'1px solid ' + (sel ? 'rgba(' + ac + ',.5)' : (themed ? 'rgba(' + ac + ',.28)' : 'transparent')), boxShadow: sel ? '0 0 0 1px rgba(' + ac + ',.14), 0 2px 9px rgba(0,0,0,.4)' : 'none', maxWidth:'175px', flex:'none' },
-      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: isSpectate ? acHex : (conn ? (isTeam ? acHex : '#ff7a59') : '#3a3a44'), flex:'none', boxShadow: (isSpectate || (conn && isTeam)) ? '0 0 6px rgba(' + ac + ',.6)' : 'none' },
+      dotStyle: { width:'7px', height:'7px', borderRadius:'50%', background: isSpectate ? acHex : (conn ? (isTeam ? acHex : 'var(--accent)') : '#3a3a44'), flex:'none', boxShadow: (isSpectate || (conn && isTeam)) ? '0 0 6px rgba(' + ac + ',.6)' : 'none' },
       onSelect: () => this.setState({ activeTabId: t.id, activePaneId: t.panes[0].id }),
-      onClose: (e) => { e.stopPropagation(); this.closeTab(t.id); }
+      onClose: (e) => { e.stopPropagation(); this.closeTab(t.id); },
+      // Drag a tab onto a pane to fold it into that tab as a split.
+      dragging: s.dragTab === t.id,
+      paneCount: t.panes.length,
+      saved: !!t.wsId,
+      onDragStart: (e) => {
+        try {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('application/x-sshache-tab', t.id);
+          e.dataTransfer.setData('text/plain', t.title || '');
+        } catch (_) {}
+        this.setState({ dragTab: t.id });
+      },
+      onDragEnd: () => this.setState({ dragTab: '', paneDrop: null }),
     };});
 
     const themesList = Object.keys(this.THEMES).map(id => {
@@ -2334,36 +2905,38 @@ export default class App extends React.Component<any, any> {
       const active = id === s.themeId;
       return {
         id, name: th.name, author: th.author, downloads: th.downloads, bg: th.bg, fg: th.fg, accent: th.accent, sw: th.sw, active,
-        cardStyle: { padding:'12px', background:'#101015', border:'1px solid ' + (active ? 'rgba(255,122,89,.45)' : '#1e1e26'), borderRadius:'10px', cursor:'pointer', transition:'border-color .15s ease', boxShadow: active ? '0 0 0 1px rgba(255,122,89,.1)' : 'none' },
+        cardStyle: { padding:'12px', background:'#101015', border:'1px solid ' + (active ? 'rgba(var(--accent-rgb),.45)' : '#1e1e26'), borderRadius:'10px', cursor:'pointer', transition:'border-color .15s ease', boxShadow: active ? '0 0 0 1px rgba(var(--accent-rgb),.1)' : 'none' },
         onApply: () => { this.setState({ themeId: id }); this.pushToast({ type:'ok', title:'Theme applied', msg: th.name + ' · by ' + th.author }); }
       };
     });
 
     // command palette
     const baseItems = [
-      { name:'Add host', hint:'⌘N', icon:'+', color:'#ff7a59', run: () => this.openAddHost() },
+      { name:'Add host', hint:'⌘N', icon:'+', color:'var(--accent)', run: () => this.openAddHost() },
       { name:'Key Vault', hint:'', icon:'🔑', color:'#46d9a0', run: () => this.setState({ keysOpen: true }) },
       { name:'Import from ~/.ssh/config', hint:'hosts', icon:'⤓', color:'#6ea8ff', run: () => this.importSshConfig() },
-      { name: (s.broadcast ? 'Broadcast input: ON — turn off' : 'Broadcast input to all panes'), hint:'cluster', icon:'⇉', color:'#ff7a59', run: () => this.toggleBroadcast() },
+      { name: (s.broadcast ? 'Broadcast input: ON — turn off' : 'Broadcast input to all panes'), hint:'cluster', icon:'⇉', color:'var(--accent)', run: () => this.toggleBroadcast() },
       { name:'Open dashboard', hint:'⌘1', icon:'⊞', color:'#6ea8ff', run: () => this.setState({ view:'dashboard' }) },
       { name:'Open terminal', hint:'⌘2', icon:'›_', color:'#46d9a0', run: () => this.setState({ view:'workspace' }) },
       { name:'Settings', hint:'', icon:'⚙', color:'#9a9aa3', run: () => this.openSettings() },
       { name:'New tab', hint:'shell', icon:'+', color:'#6ea8ff', run: () => this.newTab() },
-      { name:'Split right', hint:'⌘D', icon:'▢', color:'#ff7a59', run: () => this.splitRight() },
-      { name:'Split down', hint:'', icon:'▢', color:'#ff7a59', run: () => this.splitDown() },
+      { name:'Split right', hint:'⌘D', icon:'▢', color:'var(--accent)', run: () => this.splitRight() },
+      { name:'Split down', hint:'', icon:'▢', color:'var(--accent)', run: () => this.splitDown() },
+      ...LAYOUTS.map(l => ({ name:'Arrange — ' + l.name, hint:l.hint, icon:'▦', color:'var(--accent)', run: () => this.applyLayout(l.id) })),
+      { name:'Save as workspace', hint:'current tab', icon:'◆', color:'var(--accent)', run: () => this.openWsPrompt() },
       { name:'Close pane', hint:'', icon:'×', color:'#ff6b78', run: () => this.closePaneById(this.state.activePaneId) },
       { name:'Browse themes', hint:'⌘T', icon:'◐', color:'#bd93f9', run: () => this.setState({ themesOpen: true }) },
       { name:"What's new", hint:'', icon:'✦', color:'#46d9a0', run: () => this.setState({ whatsNewOpen: true }) },
       { name:'Open SFTP panel', hint:'⌘J', icon:'⇅', color:'#46d9a0', run: () => this.setState({ sftpOpen: true }, () => this.openSftp()) },
       { name:'Toggle sidebar', hint:'⌘B', icon:'▤', color:'#9a9aa3', run: () => this.setState(st => ({ sidebarOpen: !st.sidebarOpen })) },
       { name:'Clear terminal', hint:'', icon:'⌫', color:'#9a9aa3', run: () => this.clearActive() },
-      { name:'Lock now', hint:'', icon:'⚿', color:'#ff7a59', run: () => this.lockNow() },
+      { name:'Lock now', hint:'', icon:'⚿', color:'var(--accent)', run: () => this.lockNow() },
       { name:'Add port forward', hint:'-L', icon:'⇄', color:'#46d9a0', run: () => this.startForward('local') },
       { name:'Add dynamic SOCKS proxy', hint:'-D', icon:'⊝', color:'#bd93f9', run: () => this.startForward('socks') },
       { name:'Add remote forward', hint:'-R', icon:'⇆', color:'#6ea8ff', run: () => this.startForward('remote') },
       { name:'Stop port forwards', hint:'', icon:'⊘', color:'#ff6b78', run: () => this.stopAllForwards() }
     ];
-    const hostItems = s.hosts.map(h => ({ name:'Connect — ' + h.name, hint:h.addr, icon:'›', color:'#ff7a59', run: () => this.connectHost(h) }));
+    const hostItems = s.hosts.map(h => ({ name:'Connect — ' + h.name, hint:h.addr, icon:'›', color:'var(--accent)', run: () => this.connectHost(h) }));
     const allItems = [...baseItems, ...hostItems];
     const q = s.paletteQuery.toLowerCase();
     const paletteItems = allItems
@@ -2375,14 +2948,14 @@ export default class App extends React.Component<any, any> {
     const parentPath = (p) => { const t = (p || '/').replace(/\/+$/, ''); const i = t.lastIndexOf('/'); return i <= 0 ? '/' : t.slice(0, i); };
     const navTo = (side, path) => { if (side === 'local') this.listLocal(path); else this.listRemote(path); };
     const selOf = (side) => (side === 'local' ? s.selLocal : s.selRemote);
-    const rowStyle = (isDir, selected) => ({ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '5px', cursor: isDir ? 'pointer' : 'grab', fontSize: '11.5px', color: selected ? '#ededf0' : '#c7c7cf', background: selected ? 'rgba(255,122,89,.14)' : 'transparent' });
+    const rowStyle = (isDir, selected) => ({ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '5px', cursor: isDir ? 'pointer' : 'grab', fontSize: '11.5px', color: selected ? '#ededf0' : '#c7c7cf', background: selected ? 'rgba(var(--accent-rgb),.14)' : 'transparent' });
     const mkFile = (f, side) => {
       const isDir = f.kind === 'dir';
       const base = side === 'local' ? s.localPath : s.remotePath;
       const selected = selOf(side).includes(f.name);
       return {
         name: f.name, isDir, selected, isUp: false,
-        glyph: isDir ? '▸' : '◦', glyphColor: isDir ? '#ff7a59' : '#54545e',
+        glyph: isDir ? '▸' : '◦', glyphColor: isDir ? 'var(--accent)' : '#54545e',
         sub: isDir ? 'dir' : (f.size || ''),
         rowStyle: rowStyle(isDir, selected),
         onClick: (e) => this.onFileClick(side, f, e),
@@ -2402,7 +2975,7 @@ export default class App extends React.Component<any, any> {
               // Custom drag image: show the count instead of a single filename.
               const ghost = document.createElement('div');
               ghost.textContent = names.length + ' items';
-              ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;padding:6px 12px;background:#ff7a59;color:#0c0b0a;font:600 12px/1 "JetBrains Mono",ui-monospace,monospace;border-radius:8px;white-space:nowrap;';
+              ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;padding:6px 12px;background:'+theme.accent+';color:'+(lum(theme.accent)>0.6?'#15110e':'#ffffff')+';font:600 12px/1 "JetBrains Mono",ui-monospace,monospace;border-radius:8px;white-space:nowrap;';
               document.body.appendChild(ghost);
               e.dataTransfer.setDragImage(ghost, 12, 12);
               setTimeout(() => ghost.remove(), 0);
@@ -2428,10 +3001,10 @@ export default class App extends React.Component<any, any> {
       connecting = {
         titleText: failed ? 'Connection failed' : 'Connecting to ' + h.name,
         target: h.user + '@' + h.addr,
-        ringStyle: { position:'absolute', width:'30px', height:'30px', borderRadius:'50%', border:'1.5px solid ' + (failed ? 'rgba(255,107,120,.5)' : 'rgba(255,122,89,.5)'), animation:'acaPulse 1.6s ease-out infinite' },
-        ring2Style: { position:'absolute', width:'30px', height:'30px', borderRadius:'50%', border:'1.5px solid ' + (failed ? 'rgba(255,107,120,.5)' : 'rgba(255,122,89,.5)'), animation:'acaPulse 1.6s ease-out infinite', animationDelay:'.8s' },
-        spinnerStyle: { width:'46px', height:'46px', borderRadius:'50%', border:'2px solid #1f1f27', borderTopColor: failed ? '#ff6b78' : '#ff7a59', animation: failed ? 'none' : 'acaSpin .9s linear infinite' },
-        coreStyle: { position:'absolute', width:'12px', height:'12px', background: failed ? '#ff6b78' : '#ff7a59', borderRadius:'3px', transform:'rotate(45deg)' },
+        ringStyle: { position:'absolute', width:'30px', height:'30px', borderRadius:'50%', border:'1.5px solid ' + (failed ? 'rgba(255,107,120,.5)' : 'rgba(var(--accent-rgb),.5)'), animation:'acaPulse 1.6s ease-out infinite' },
+        ring2Style: { position:'absolute', width:'30px', height:'30px', borderRadius:'50%', border:'1.5px solid ' + (failed ? 'rgba(255,107,120,.5)' : 'rgba(var(--accent-rgb),.5)'), animation:'acaPulse 1.6s ease-out infinite', animationDelay:'.8s' },
+        spinnerStyle: { width:'46px', height:'46px', borderRadius:'50%', border:'2px solid #1f1f27', borderTopColor: failed ? '#ff6b78' : 'var(--accent)', animation: failed ? 'none' : 'acaSpin .9s linear infinite' },
+        coreStyle: { position:'absolute', width:'12px', height:'12px', background: failed ? '#ff6b78' : 'var(--accent)', borderRadius:'3px', transform:'rotate(45deg)' },
         steps: labels.map((l, i) => {
           let st = 'pending';
           if (i < s.connecting.step) st = 'done';
@@ -2450,7 +3023,7 @@ export default class App extends React.Component<any, any> {
       arrow: s.transfer.dir === 'up' ? '↑' : '↓',
       queued: s.queue.length,
       pctLabel: Math.round(s.transfer.pct) + '%',
-      fillStyle: { height:'100%', width: s.transfer.pct + '%', background:'linear-gradient(90deg,#ff7a59,#ffb38a)', borderRadius:'4px', transition:'width .12s linear' }
+      fillStyle: { height:'100%', width: s.transfer.pct + '%', background:'linear-gradient(90deg,var(--accent),var(--accent-hi))', borderRadius:'4px', transition:'width .12s linear' }
     } : null;
 
     // toasts
@@ -2465,21 +3038,23 @@ export default class App extends React.Component<any, any> {
       };
     });
 
-    const dragBox = (sideKey) => ({ flex:1, minWidth:0, display:'flex', flexDirection:'column', background: s.dragOver === sideKey ? 'rgba(255,122,89,.06)' : 'transparent', border:'1px dashed ' + (s.dragOver === sideKey ? 'rgba(255,122,89,.55)' : '#1c1c24'), borderRadius:'8px', overflow:'hidden', transition:'all .12s ease' });
+    const dragBox = (sideKey) => ({ flex:1, minWidth:0, display:'flex', flexDirection:'column', background: s.dragOver === sideKey ? 'rgba(var(--accent-rgb),.06)' : 'transparent', border:'1px dashed ' + (s.dragOver === sideKey ? 'rgba(var(--accent-rgb),.55)' : '#1c1c24'), borderRadius:'8px', overflow:'hidden', transition:'all .12s ease' });
 
     // ---------- DASHBOARD ----------
+    // Workspaces live in the same folders, filters and groups as connections — a second card kind.
     const folderNames = [];
     s.hosts.forEach(h => { if (!folderNames.includes(h.folder)) folderNames.push(h.folder); });
+    s.workspaces.forEach(w => { if (w.folder && !folderNames.includes(w.folder)) folderNames.push(w.folder); });
     const folderItemStyle = (on) => ({ display:'flex', alignItems:'center', gap:'9px', padding:'7px 9px', borderRadius:'6px', cursor:'pointer', fontSize:'12px', color: on ? '#ededf0' : '#9a9aa3', background: on ? '#15151b' : 'transparent', border:'1px solid ' + (on ? '#26262e' : 'transparent') });
     const allActive = s.activeFolder === 'all';
-    const allFolder = { count: s.hosts.length, active: allActive, style: folderItemStyle(allActive), onSelect: () => this.setFolder('all') };
-    const folderColorOf = (name) => { const m = s.folderMeta[name]; return (m && m.color) || '#ff7a59'; };
+    const allFolder = { count: s.hosts.length + s.workspaces.length, active: allActive, style: folderItemStyle(allActive), onSelect: () => this.setFolder('all') };
+    const folderColorOf = (name) => { const m = s.folderMeta[name]; return (m && m.color) || 'var(--accent)'; };
     const folders = folderNames.map(name => {
       const on = s.activeFolder === name;
       const meta = s.folderMeta[name] || {};
       const color = folderColorOf(name);
       return {
-        name, count: s.hosts.filter(h => h.folder === name).length, active: on, favorite: !!meta.favorite, color,
+        name, count: s.hosts.filter(h => h.folder === name).length + s.workspaces.filter(w => w.folder === name).length, active: on, favorite: !!meta.favorite, color,
         style: folderItemStyle(on), countColor: on ? color : '#54545e',
         onSelect: () => this.setFolder(name), onToggleFav: () => this.toggleFolderFav(name), onEdit: () => this.openFolderEdit(name),
       };
@@ -2488,7 +3063,8 @@ export default class App extends React.Component<any, any> {
 
     const tagSet = [];
     s.hosts.forEach(h => h.tags.forEach(t => { if (!tagSet.includes(t)) tagSet.push(t); }));
-    const tagChipStyle = (on) => ({ padding:'5px 11px', borderRadius:'20px', cursor:'pointer', fontSize:'11px', color: on ? '#ff7a59' : '#9a9aa3', background: on ? 'rgba(255,122,89,.1)' : '#101015', border:'1px solid ' + (on ? 'rgba(255,122,89,.45)' : '#20202a') });
+    s.workspaces.forEach(w => (w.tags || []).forEach(t => { if (!tagSet.includes(t)) tagSet.push(t); }));
+    const tagChipStyle = (on) => ({ padding:'5px 11px', borderRadius:'20px', cursor:'pointer', fontSize:'11px', color: on ? 'var(--accent)' : '#9a9aa3', background: on ? 'rgba(var(--accent-rgb),.1)' : '#101015', border:'1px solid ' + (on ? 'rgba(var(--accent-rgb),.45)' : '#20202a') });
     const allTags = tagSet.map(t => { const on = s.activeTags.includes(t); return { name: t, active: on, style: tagChipStyle(on), onToggle: () => this.toggleTag(t) }; });
 
     const dq = s.search.trim().toLowerCase();
@@ -2511,7 +3087,7 @@ export default class App extends React.Component<any, any> {
         onPresence: (e) => { e.stopPropagation(); this.setState({ presenceModal: { teamId: h.teamId, name: h.name, presence: (this.state.teamPresence || {})[h.connId] || [] } }); },
         tags: h.tags.map(t => ({ name: t })),
         dotStyle: { width:'8px', height:'8px', borderRadius:'50%', flex:'none', background: h.online ? '#46d9a0' : '#3a3a44', boxShadow: h.online ? '0 0 7px rgba(70,217,160,.6)' : 'none' },
-        cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? '#15130f' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(255,122,89,.55)' : isTeam ? 'rgba(70,217,160,.5)' : '#1c1c24'), boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none', borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
+        cardStyle: { position:'relative', display:'flex', flexDirection:'column', gap:'9px', padding:'14px 15px', background: isNew ? 'rgba(var(--accent-rgb),.07)' : '#0d0d11', border:'1px solid ' + (isNew ? 'rgba(var(--accent-rgb),.55)' : isTeam ? 'rgba(70,217,160,.5)' : '#1c1c24'), boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none', borderRadius:'11px', cursor:'pointer', transition:'border-color .15s ease, transform .15s ease', animation: isNew ? 'acaRise .35s ease' : 'none' },
         onConnect: () => this.connectHost(h),
         onEdit: (e) => { e.stopPropagation(); void this.openEditHost(h); },
         onCopy: (e) => { e.stopPropagation(); this.copyCommand(h); },
@@ -2522,19 +3098,79 @@ export default class App extends React.Component<any, any> {
         onToggleFav: (e) => { e.stopPropagation(); this.toggleHostFav(h.id); },
       };
     };
-    // Favourite connections float into a group at the top; the rest group by folder.
+    // ---------- WORKSPACE CARDS ----------
+    // Same filters as connections, matched against the workspace and the connections it opens.
+    const wsMembers = (w) => (w.slots || []).map(sl => {
+      if (!sl) return { name: 'Empty', kind: 'empty' };
+      if (sl.local) return { name: 'Local shell', kind: 'local' };
+      const h = this._hostForSlot(sl);
+      return h
+        ? { name: h.name, kind: 'ssh', target: (h.user || '') + '@' + h.addr, missing: false }
+        : { name: sl.name || 'Missing', kind: 'ssh', target: (sl.user || '') + '@' + (sl.addr || ''), missing: true };
+    });
+    const matchWs = (w) => {
+      if (s.activeFolder !== 'all' && w.folder !== s.activeFolder) return false;
+      if (s.activeTags.length && !s.activeTags.some(t => (w.tags || []).includes(t))) return false;
+      if (dq) {
+        const hay = (w.name + ' ' + (w.folder || '') + ' ' + (w.tags || []).join(' ') + ' ' + wsMembers(w).map(m => m.name + ' ' + (m.target || '')).join(' ')).toLowerCase();
+        if (!hay.includes(dq)) return false;
+      }
+      return true;
+    };
+    const filteredWs = s.workspaces.filter(matchWs);
+    const mkWsCard = (w) => {
+      const preset = layoutById(w.layoutId) || LAYOUTS[0];
+      const members = wsMembers(w);
+      const isNew = s.newWsId === w.id;
+      const isTeam = !!w.teamId; // shared with a team → green, like team connection cards
+      return {
+        id: w.id, name: w.name, workspace: true, preset, folder: w.folder, lastUsed: w.lastUsed || 'never', isTeam,
+        paneLabel: members.length + ' pane' + (members.length === 1 ? '' : 's'),
+        members: members.slice(0, 4).map(m => ({
+          name: m.name,
+          dotStyle: { width: '6px', height: '6px', borderRadius: '50%', flex: 'none', background: m.missing ? '#ff6b78' : m.kind === 'local' ? '#6ea8ff' : m.kind === 'empty' ? '#3a3a44' : '#46d9a0' },
+          missing: !!m.missing,
+        })),
+        more: Math.max(0, members.length - 4),
+        broken: members.some(m => m.missing),
+        tags: (w.tags || []).map(t => ({ name: t })),
+        favorite: !!w.favorite,
+        cardStyle: {
+          position: 'relative', display: 'flex', flexDirection: 'column', gap: '9px', padding: '14px 15px',
+          background: isNew ? 'rgba(var(--accent-rgb),.07)' : isTeam ? 'linear-gradient(150deg,rgba(70,217,160,.06),#0d0d11 62%)' : 'linear-gradient(150deg,rgba(var(--accent-rgb),.05),#0d0d11 62%)',
+          border: '1px solid ' + (isNew ? 'rgba(var(--accent-rgb),.55)' : isTeam ? 'rgba(70,217,160,.45)' : 'rgba(var(--accent-rgb),.28)'),
+          boxShadow: isTeam ? 'inset 3px 0 0 rgba(70,217,160,.85)' : 'none',
+          borderRadius: '11px', cursor: 'pointer', transition: 'border-color .15s ease, transform .15s ease',
+          animation: isNew ? 'acaRise .35s ease' : 'none',
+        },
+        onOpen: () => { void this.openWorkspace(w); },
+        onEdit: (e) => { e.stopPropagation(); this.openWsPrompt(w); },
+        onExport: (e) => { e.stopPropagation(); void this.exportWorkspace(w); },
+        onToggleFav: (e) => { e.stopPropagation(); this.toggleWsFav(w.id); },
+      };
+    };
+
+    // Favourites float into a group at the top; the rest group by folder. Workspaces sort ahead of
+    // connections inside a group — they are the "open everything" entry points.
     const favHosts = filtered.filter(h => h.favorite);
     const restHosts = filtered.filter(h => !h.favorite);
+    const favWs = filteredWs.filter(w => w.favorite);
+    const restWs = filteredWs.filter(w => !w.favorite);
     const groupNames = [];
+    restWs.forEach(w => { if (w.folder && !groupNames.includes(w.folder)) groupNames.push(w.folder); });
     restHosts.forEach(h => { if (!groupNames.includes(h.folder)) groupNames.push(h.folder); });
-    const folderGroups = groupNames.map(name => ({ folder: name, color: folderColorOf(name), count: restHosts.filter(h => h.folder === name).length, cards: restHosts.filter(h => h.folder === name).map(mkCard) }));
-    const groups = favHosts.length
-      ? [{ folder: '★ Favorites', color: '#ffcf5c', count: favHosts.length, cards: favHosts.map(mkCard) }, ...folderGroups]
+    const folderGroups = groupNames.map(name => {
+      const ws = restWs.filter(w => w.folder === name);
+      const hs = restHosts.filter(h => h.folder === name);
+      return { folder: name, color: folderColorOf(name), count: ws.length + hs.length, cards: [...ws.map(mkWsCard), ...hs.map(mkCard)] };
+    });
+    const groups = (favWs.length + favHosts.length)
+      ? [{ folder: '★ Favorites', color: '#ffcf5c', count: favWs.length + favHosts.length, cards: [...favWs.map(mkWsCard), ...favHosts.map(mkCard)] }, ...folderGroups]
       : folderGroups;
 
     // ---------- ADD HOST FORM ----------
     const f = s.form;
-    const segStyle = (on) => ({ flex:1, textAlign:'center', padding:'9px', borderRadius:'7px', cursor:'pointer', fontSize:'12px', color: on ? '#0c0b0a' : '#b9b9c2', background: on ? '#ff7a59' : '#101015', border:'1px solid ' + (on ? '#ff7a59' : '#20202a'), fontWeight: on ? '600' : '400', transition:'all .12s ease' });
+    const segStyle = (on) => ({ flex:1, textAlign:'center', padding:'9px', borderRadius:'7px', cursor:'pointer', fontSize:'12px', color: on ? 'var(--accent-ink)' : '#b9b9c2', background: on ? 'var(--accent)' : '#101015', border:'1px solid ' + (on ? 'var(--accent)' : '#20202a'), fontWeight: on ? '600' : '400', transition:'all .12s ease' });
     const subSegStyle = (on) => ({ flex:1, textAlign:'center', padding:'7px', borderRadius:'6px', cursor:'pointer', fontSize:'11.5px', color: on ? '#ededf0' : '#8b8b95', background: on ? '#1a1a20' : 'transparent', border:'1px solid ' + (on ? '#2c2c36' : 'transparent') });
     const keyVal = this.validateKey(f.keyText);
     const keyStateColor = keyVal.state === 'valid' ? '#46d9a0' : keyVal.state === 'error' ? '#ff6b78' : '#6a6a74';
@@ -2544,9 +3180,9 @@ export default class App extends React.Component<any, any> {
 
     // ---------- SETTINGS ----------
     const st = s.settings;
-    const toggleTrackStyle = (on) => ({ width:'38px', height:'22px', borderRadius:'11px', background: on ? '#ff7a59' : '#26262e', position:'relative', cursor:'pointer', transition:'background .15s ease', flex:'none' });
+    const toggleTrackStyle = (on) => ({ width:'38px', height:'22px', borderRadius:'11px', background: on ? 'var(--accent)' : '#26262e', position:'relative', cursor:'pointer', transition:'background .15s ease', flex:'none' });
     const toggleKnobStyle = (on) => ({ position:'absolute', top:'2px', left: on ? '18px' : '2px', width:'18px', height:'18px', borderRadius:'50%', background:'#fff', transition:'left .15s ease' });
-    const themeOptions = Object.keys(this.THEMES).map(id => { const th = this.THEMES[id]; const on = id === s.themeId; return { id, name: th.name, active: on, dotStyle: { width:'12px', height:'12px', borderRadius:'4px', background: th.accent, flex:'none' }, style: { display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px', borderRadius:'7px', cursor:'pointer', fontSize:'12px', color: on ? '#ededf0' : '#9a9aa3', background: on ? '#15151b' : '#0e0e12', border:'1px solid ' + (on ? 'rgba(255,122,89,.4)' : '#1c1c24') }, onPick: () => { this.setState({ themeId: id }); } }; });
+    const themeOptions = Object.keys(this.THEMES).map(id => { const th = this.THEMES[id]; const on = id === s.themeId; return { id, name: th.name, active: on, dotStyle: { width:'12px', height:'12px', borderRadius:'4px', background: th.accent, flex:'none' }, style: { display:'flex', alignItems:'center', gap:'8px', padding:'8px 10px', borderRadius:'7px', cursor:'pointer', fontSize:'12px', color: on ? '#ededf0' : '#9a9aa3', background: on ? '#15151b' : '#0e0e12', border:'1px solid ' + (on ? 'rgba(var(--accent-rgb),.4)' : '#1c1c24') }, onPick: () => { this.setState({ themeId: id }); } }; });
 
     return {
       themeVars: themeVars(theme),
@@ -2617,6 +3253,72 @@ export default class App extends React.Component<any, any> {
       author: AUTHOR, openExt,
       newTab: () => this.newTab(),
       splitRight: this.splitRight, splitDown: this.splitDown,
+      layoutOptions, wsMenuOpen: s.wsMenu,
+      toggleWsMenu: () => this.setState(st => ({ wsMenu: !st.wsMenu })),
+      // Workspace menu: save the current arrangement, and quick-open a saved one.
+      wsSavedList: s.workspaces.slice(0, 8).map(w => ({
+        id: w.id, name: w.name, preset: layoutById(w.layoutId) || LAYOUTS[0],
+        sub: ((w.slots || []).filter(Boolean).length) + ' connection' + (((w.slots || []).filter(Boolean).length) === 1 ? '' : 's'),
+        active: !!(activeTab && activeTab.wsId === w.id),
+        onOpen: () => { void this.openWorkspace(w); },
+      })),
+      wsSavedMore: Math.max(0, s.workspaces.length - 8),
+      canSaveWs: !!(activeTab && activeTab.panes.some(p => !p.empty)),
+      wsSaveLabel: (activeTab && activeTab.wsId) ? 'Update “' + (activeTab.title || 'workspace') + '”' : 'Save as workspace…',
+      onSaveWs: () => this.openWsPrompt(),
+      // Save / edit modal
+      wsPromptOpen: !!s.wsPrompt,
+      wsPrompt: s.wsPrompt ? {
+        editing: s.wsPrompt.mode === 'edit',
+        title: s.wsPrompt.mode === 'edit' ? 'Edit workspace' : (s.wsPrompt.id ? 'Update workspace' : 'Save workspace'),
+        name: s.wsPrompt.name, folder: s.wsPrompt.folder, tags: s.wsPrompt.tags, tagInput: s.wsPrompt.tagInput,
+        panes: s.wsPrompt.panes || [],
+        canDelete: s.wsPrompt.mode === 'edit',
+        teamOptions: s.wsPrompt.teamOptions || [],
+        share: s.wsPrompt.share || '',
+        shareTeamId: s.wsPrompt.shareTeamId || '',
+        alreadyShared: !!s.wsPrompt.alreadyShared,
+        shareTeamName: ((s.wsPrompt.teamOptions || []).find(t => t.teamId === s.wsPrompt.shareTeamId) || {}).teamName || '',
+        onShare: (mode) => this.setState(st => (st.wsPrompt ? { wsPrompt: { ...st.wsPrompt, share: mode, folder: mode === 'team' && st.wsPrompt.shareTeamId ? 'Team · ' + (((st.wsPrompt.teamOptions || []).find(t => t.teamId === st.wsPrompt.shareTeamId) || {}).teamName || 'Shared') : (mode === 'private' ? 'Others' : st.wsPrompt.folder) } } : {})),
+        onPickShareTeam: (teamId) => this.setState(st => (st.wsPrompt ? { wsPrompt: { ...st.wsPrompt, shareTeamId: teamId, folder: st.wsPrompt.share === 'team' ? 'Team · ' + (((st.wsPrompt.teamOptions || []).find(t => t.teamId === teamId) || {}).teamName || 'Shared') : st.wsPrompt.folder } } : {})),
+        onName: (e) => this.setWsField('name', e.target.value),
+        onFolder: (e) => this.setWsField('folder', e.target.value),
+        onTagInput: (e) => this.setWsField('tagInput', e.target.value),
+        onTagKey: (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); this.addWsTag(); } },
+        onRemoveTag: (t) => this.removeWsTag(t),
+        onSubmit: () => this.submitWsPrompt(),
+        onCancel: () => this.cancelWsPrompt(),
+        onDelete: () => this.deleteWorkspace(s.wsPrompt.id),
+        folderSuggestions: folderNames.filter(n => n && n !== s.wsPrompt.folder).slice(0, 6),
+        onPickFolder: (n) => this.setWsField('folder', n),
+      } : null,
+      cancelConnect: this.cancelConnect,
+      secretPromptOpen: !!s.secretPrompt,
+      secretPromptTitle: s.secretPrompt ? ('Connect to ' + s.secretPrompt.host.name) : '',
+      secretPromptLabel: s.secretPrompt && s.secretPrompt.kind === 'key' ? 'Key passphrase' : 'Password',
+      secretPromptHint: s.secretPrompt && s.secretPrompt.kind === 'key' ? 'Blank if your key has no passphrase. Never written to disk.' : 'Used for this connection only. Never written to disk.',
+      secretValue: s.secretPrompt ? s.secretPrompt.value : '',
+      onSecretInput: (e) => this.setState(st => ({ secretPrompt: st.secretPrompt ? { ...st.secretPrompt, value: e.target.value } : null })),
+      onSecretKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.submitSecret(); } },
+      submitSecret: () => this.submitSecret(), cancelSecret: () => this.cancelSecret(),
+      hostKeyOpen: !!s.hostKeyPrompt,
+      hostKeyName: s.hostKeyPrompt ? s.hostKeyPrompt.host.name : '',
+      hostKeyTarget: s.hostKeyPrompt ? (s.hostKeyPrompt.host.user + '@' + s.hostKeyPrompt.host.addr + ':' + (s.hostKeyPrompt.host.port || '22')) : '',
+      hostKeyFp: s.hostKeyPrompt ? s.hostKeyPrompt.fp : '',
+      acceptHostKey: this.acceptHostKey, rejectHostKey: this.rejectHostKey,
+      confirmCloseOpen: !!s.confirmClose,
+      confirmCloseName: s.confirmClose ? s.confirmClose.name : '',
+      confirmCloseTab: () => this.confirmCloseTab(),
+      cancelConfirmClose: () => this.setState({ confirmClose: null }),
+
+      // view nav
+      isDashboard: s.view === 'dashboard', isWorkspace: s.view === 'workspace',
+      sessionCount: s.tabs.length,
+      navDashStyle: folderItemStyle(s.view === 'dashboard'),
+      navTermStyle: folderItemStyle(s.view === 'workspace'),
+      goDashboard: () => this.setView('dashboard'),
+      goTerminal: () => this.setView('workspace'),
+
       cancelConnect: this.cancelConnect,
       secretPromptOpen: !!s.secretPrompt,
       secretPromptTitle: s.secretPrompt ? ('Connect to ' + s.secretPrompt.host.name) : '',
@@ -2650,10 +3352,15 @@ export default class App extends React.Component<any, any> {
       dismissTeamNudge: () => this.setState(st => ({ settings: { ...st.settings, teamNudgeDismissed: true } })),
       teamsDefaults: { email: s.settings.teamsEmail || '' },
       teamBadge: this.teamBadge(),
+      teamsRev: s.teamsRev,
+      teamsAccount: { signedIn: teams.isSignedIn(), email: teams.currentEmail() },
+      signOutTeams: () => this.signOutTeams(),
+      onTeamsSignedOut: () => this.setState(st => ({ activeTeamId: '', teamPresence: {}, teamsRev: st.teamsRev + 1 })),
 
       // dashboard
       allFolder, folders, allTags, groups,
-      totalHosts: s.hosts.length, filteredCount: filtered.length, dashEmpty: filtered.length === 0,
+      totalHosts: s.hosts.length, filteredCount: filtered.length, dashEmpty: filtered.length + filteredWs.length === 0,
+      wsCount: filteredWs.length,
       hasTags: tagSet.length > 0,
       searchValue: s.search, onSearch: (e) => this.setSearch(e.target.value), clearSearch: () => this.setSearch(''),
       activeFolderLabel: s.activeFolder === 'all' ? 'All connections' : s.activeFolder,
@@ -2723,7 +3430,7 @@ export default class App extends React.Component<any, any> {
       },
       folderChips: folderNames.map(name => ({ name, onPick: () => this.setField('folder', name) })),
       saveHost: () => this.saveHost(), canSaveHost,
-      saveHostStyle: { padding:'10px 20px', borderRadius:'8px', border:'none', font:'inherit', fontSize:'12.5px', fontWeight:'600', cursor: canSaveHost ? 'pointer' : 'not-allowed', color:'#0c0b0a', background: canSaveHost ? '#ff7a59' : '#3a3024', opacity: canSaveHost ? '1' : '.55' },
+      saveHostStyle: { padding:'10px 20px', borderRadius:'8px', border:'none', font:'inherit', fontSize:'12.5px', fontWeight:'600', cursor: canSaveHost ? 'pointer' : 'not-allowed', color:'var(--accent-ink)', background: canSaveHost ? 'var(--accent)' : 'rgba(var(--accent-rgb),.3)', opacity: canSaveHost ? '1' : '.55' },
 
       // settings
       settingsOpen: s.settingsOpen, openSettings: () => this.openSettings(), closeSettings: () => this.closeSettings(),
@@ -2792,10 +3499,10 @@ export default class App extends React.Component<any, any> {
       doCheckUpdate: () => this.checkUpdate(true),
       doDownloadUpdate: () => this.downloadUpdate(),
       ioOpen: !!s.ioPrompt,
-      ioTitle: s.ioPrompt ? ({ export: 'Export — encrypt with a password', export1: 'Export connection — optional password', import1: 'Import connection', import: 'Import — enter the password' }[s.ioPrompt.mode] || 'Import') : '',
+      ioTitle: s.ioPrompt ? ({ export: 'Export — encrypt with a password', export1: 'Export connection — optional password', import1: 'Import connection or workspace', exportWs: 'Export workspace — optional password', import: 'Import — enter the password' }[s.ioPrompt.mode] || 'Import') : '',
       ioLabel: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'New password' : 'Password') : '',
-      ioHint: s.ioPrompt ? ({ export: 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.', export1: 'Leave blank to export as plain JSON. With a password, the file (connection + its secret) is AES-256-GCM encrypted.', import1: 'Enter the password only if this connection file was exported with one — otherwise leave it blank.', import: 'Enter the password used when this file was exported.' }[s.ioPrompt.mode] || '') : '',
-      ioCta: s.ioPrompt ? ({ export: 'Choose file & export', export1: 'Choose file & export', import1: 'Import connection', import: 'Import' }[s.ioPrompt.mode] || 'Import') : '',
+      ioHint: s.ioPrompt ? ({ export: 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.', export1: 'Leave blank to export as plain JSON. With a password, the file (connection + its secret) is AES-256-GCM encrypted.', import1: 'Enter the password only if the file was exported with one — otherwise leave it blank.', exportWs: 'Leave blank to export the arrangement and its connections WITHOUT secrets. With a password, the file (workspace + connections + their secrets) is AES-256-GCM encrypted.', import: 'Enter the password used when this file was exported.' }[s.ioPrompt.mode] || '') : '',
+      ioCta: s.ioPrompt ? ({ export: 'Choose file & export', export1: 'Choose file & export', import1: 'Import', exportWs: 'Choose file & export', import: 'Import' }[s.ioPrompt.mode] || 'Import') : '',
       ioValue: s.ioPrompt ? s.ioPrompt.value : '',
       onIoInput: (e) => this.setState(st => ({ ioPrompt: st.ioPrompt ? { ...st.ioPrompt, value: e.target.value } : null })),
       onIoKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.ioSubmit(); } },
@@ -2900,6 +3607,13 @@ export default class App extends React.Component<any, any> {
                 ))}
               </div>
               <div style={css("padding:10px;border-top:1px solid #14141a;display:flex;flex-direction:column;gap:7px;")}>
+                {v.teamsAccount.signedIn && (
+                  <div style={css("display:flex;align-items:center;gap:8px;padding:7px 8px;background:" + TEAMS_HUE.soft + ";border:1px solid " + TEAMS_HUE.line + ";border-radius:7px;")}>
+                    <span style={{ ...css("width:20px;height:20px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;text-transform:uppercase;"), background: TEAMS_HUE.grad }}>{(v.teamsAccount.email || '?').slice(0, 1)}</span>
+                    <span title={v.teamsAccount.email} style={css("flex:1;min-width:0;font-size:11px;color:#b9b9c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.teamsAccount.email || 'Signed in'}</span>
+                    <Hov onClick={v.signOutTeams} title={"Sign " + (v.teamsAccount.email || 'this account') + " out of this device"} s="flex:none;padding:3px 7px;border:1px solid #26262e;border-radius:5px;color:#8b8b95;font-size:10px;cursor:pointer;" h="border-color:rgba(255,107,120,.45);color:#ff6b78;">Sign out</Hov>
+                  </div>
+                )}
                 <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;justify-content:center;gap:7px;padding:9px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">
                   <span style={css("font-size:14px;")}>+</span><span>Add host</span>
                 </Hov>
@@ -2918,8 +3632,10 @@ export default class App extends React.Component<any, any> {
             {v.isTeams && (
               <div style={css("flex:1;min-height:0;overflow:auto;padding:24px;")}>
                 <TeamsPanel
+                  key={v.teamsRev}
                   isTauri={isTauri}
                   defaults={v.teamsDefaults}
+                  onSignedOut={v.onTeamsSignedOut}
                   onRemember={(email) => this.rememberTeams(email)}
                   onImport={(args) => this.importTeamHost(args)}
                   onSync={(force) => this.syncAllTeams(force)}
@@ -2940,7 +3656,7 @@ export default class App extends React.Component<any, any> {
                 </div>
                 <div style={css("font-size:13px;color:#9a9aa3;margin-top:11px;max-width:470px;line-height:1.65;")}>No connections yet. Add your first server to get started — a fast, secure terminal with SFTP and port forwarding, all on your machine. When you're ready, share them with your team, end-to-end encrypted.</div>
                 <div style={css("margin-top:26px;display:flex;align-items:center;gap:11px;")}>
-                  <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(255,122,89,.28);" h="background:#ff8d70;">
+                  <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(var(--accent-rgb),.28);" h="background:#ff8d70;">
                     <span style={css("font-size:16px;")}>+</span><span>Add your first connection</span>
                   </Hov>
                   <Hov as="button" onClick={v.onImportOne} s="display:flex;align-items:center;gap:8px;padding:13px 20px;background:#101015;border:1px solid #20202a;border-radius:10px;color:#b9b9c2;font:inherit;font-size:13px;cursor:pointer;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">
@@ -3009,8 +3725,55 @@ export default class App extends React.Component<any, any> {
                         <span style={css("flex:1;height:1px;background:#15151b;")}></span>
                       </div>
                       <div style={css("display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:13px;")}>
-                        {group.cards.map((card) => (
-                          <Hov key={card.id} className="aca-card" onClick={card.onConnect} s={card.cardStyle} h="border-color:rgba(255,122,89,.55);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.35);">
+                        {group.cards.map((card) => card.workspace ? (
+                          /* WORKSPACE CARD — opens several connections at once */
+                          <Hov key={card.id} className="aca-card" onClick={card.onOpen} s={card.cardStyle} h="border-color:rgba(var(--accent-rgb),.75);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.35);">
+                            <div style={css("display:flex;align-items:flex-start;gap:11px;min-width:0;")}>
+                              <span style={{ ...css("flex:none;padding:5px;border-radius:7px;color:var(--accent);background:rgba(var(--accent-rgb),.12);border:1px solid rgba(var(--accent-rgb),.3);display:flex;") }}>
+                                <LayoutThumb preset={card.preset} w={28} />
+                              </span>
+                              <span style={css("flex:1;min-width:0;")}>
+                                <span style={css("display:flex;align-items:center;gap:7px;min-width:0;")}>
+                                  <span style={css("flex:1;min-width:0;font-size:14px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
+                                  {card.favorite && (<span title="Favorite" style={css("font-size:12px;color:#ffcf5c;flex:none;")}>★</span>)}
+                                </span>
+                                <span style={css("display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap;")}>
+                                  <span style={{ ...css("font-size:8.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;border-radius:4px;padding:2px 6px;color:var(--accent-ink);background:var(--accent);") }}>Workspace</span>
+                                  {card.isTeam && (<span style={css("font-size:8.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;border-radius:4px;padding:2px 6px;color:#0b0b0e;background:#46d9a0;")}>Team</span>)}
+                                  <span style={css("font-size:10.5px;color:#6a6a74;")}>{card.paneLabel}</span>
+                                </span>
+                              </span>
+                            </div>
+                            <div className="aca-actions" style={css("position:absolute;top:11px;right:13px;display:flex;align-items:center;gap:5px;background:#0d0d11;padding-left:10px;border-radius:6px;")}>
+                              <Hov onClick={card.onToggleFav} title={card.favorite ? 'Unfavorite' : 'Favorite'} s={{ width: '25px', height: '25px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: card.favorite ? '#ffcf5c' : '#9a9aa3', border: '1px solid #20202a', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', background: '#101015' }} h="background:#16161c;border-color:#2c2c36;">{card.favorite ? '★' : '☆'}</Hov>
+                              <Hov onClick={card.onExport} title="Export workspace" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:12px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">⤓</Hov>
+                              <Hov onClick={card.onEdit} title="Edit workspace" s="width:25px;height:25px;display:flex;align-items:center;justify-content:center;color:#9a9aa3;border:1px solid #20202a;border-radius:6px;font-size:11px;background:#101015;" h="background:#16161c;color:#ededf0;border-color:#2c2c36;">✎</Hov>
+                            </div>
+                            <div style={css("display:flex;flex-direction:column;gap:3px;")}>
+                              {card.members.map((m, mi) => (
+                                <span key={mi} style={css("display:flex;align-items:center;gap:7px;min-width:0;font-size:11.5px;color:" + (m.missing ? "#ff6b78" : "#9a9aa3") + ";")}>
+                                  <span style={m.dotStyle}></span>
+                                  <span style={css("flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{m.name}</span>
+                                  {m.missing && (<span style={css("font-size:9.5px;color:#ff6b78;flex:none;")}>missing</span>)}
+                                </span>
+                              ))}
+                              {card.more > 0 && (<span style={css("font-size:10.5px;color:#54545e;padding-left:13px;")}>+{card.more} more</span>)}
+                            </div>
+                            {card.tags.length > 0 && (
+                              <div style={css("display:flex;flex-wrap:wrap;gap:5px;")}>
+                                {card.tags.map((t, ti) => (
+                                  <span key={ti} style={css("font-size:10px;color:#8b8b95;background:#15151b;border-radius:5px;padding:2px 7px;")}>#{t.name}</span>
+                                ))}
+                              </div>
+                            )}
+                            <div style={css("display:flex;align-items:center;gap:6px;margin-top:3px;")}>
+                              <span style={css("font-size:10px;color:#54545e;")}>opened {card.lastUsed}</span>
+                              <span style={css("flex:1;")}></span>
+                              <span style={css("font-size:10.5px;color:var(--accent);font-weight:600;")}>Open all →</span>
+                            </div>
+                          </Hov>
+                        ) : (
+                          <Hov key={card.id} className="aca-card" onClick={card.onConnect} s={card.cardStyle} h="border-color:rgba(var(--accent-rgb),.55);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.35);">
                             <div style={css("display:flex;align-items:center;gap:9px;min-width:0;")}>
                               <span style={card.dotStyle}></span>
                               <span style={css("flex:1;min-width:0;font-size:14px;font-weight:600;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{card.name}</span>
@@ -3071,16 +3834,70 @@ export default class App extends React.Component<any, any> {
                   <Hov onClick={v.toggleSidebar} title="Toggle sidebar (⌘B)" s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#6a6a74;cursor:pointer;flex:none;" h="background:#15151b;color:#ededf0;">▤</Hov>
                   <div style={css("display:flex;align-items:center;gap:4px;overflow:hidden;")}>
                     {v.tabs.map((tab) => (
-                      <div key={tab.id} onClick={tab.onSelect} style={tab.style}>
+                      <div
+                        key={tab.id}
+                        onClick={tab.onSelect}
+                        draggable
+                        onDragStart={tab.onDragStart}
+                        onDragEnd={tab.onDragEnd}
+                        title={tab.dragging ? 'Drop on a pane to split' : 'Drag onto a pane to split it into this tab'}
+                        style={{ ...tab.style, ...(tab.dragging ? { opacity: 0.45, border: '1px dashed rgba(var(--accent-rgb),.6)', cursor: 'grabbing' } : {}) }}
+                      >
                         <span style={tab.dotStyle}></span>
                         <span style={css("overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{tab.title}</span>
+                        {tab.paneCount > 1 && (<span style={css("font-size:9px;color:#54545e;border:1px solid #20202a;border-radius:9px;padding:0 5px;flex:none;")}>{tab.paneCount}</span>)}
+                        {tab.saved && (<span title="Saved workspace" style={css("font-size:9px;color:var(--accent);flex:none;")}>◆</span>)}
                         <Hov onClick={tab.onClose} s="margin-left:2px;width:16px;height:16px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:#54545e;font-size:13px;" h="background:#26262e;color:#ededf0;">×</Hov>
                       </div>
                     ))}
                   </div>
                   <Hov onClick={v.newTab} title="New tab" s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8b8b95;cursor:pointer;flex:none;font-size:15px;" h="background:#15151b;color:#ededf0;">+</Hov>
                   <span style={css("flex:1;")}></span>
-                  <div style={css("display:flex;align-items:center;gap:3px;")}>
+                  <div style={css("display:flex;align-items:center;gap:3px;position:relative;")}>
+                    {/* Workspace: arrangement presets, save the current one, reopen a saved one */}
+                    <Hov onClick={v.toggleWsMenu} title="Workspace — arrange panes, save & reopen" s={"display:flex;align-items:center;gap:5px;height:26px;padding:0 8px;border-radius:5px;cursor:pointer;color:" + (v.wsMenuOpen ? "#ededf0" : "#8b8b95") + ";background:" + (v.wsMenuOpen ? "#15151b" : "transparent") + ";"} h="background:#15151b;color:#ededf0;">
+                      <span style={css("font-size:12px;")}>▦</span>
+                      <span style={css("font-size:11px;")}>Workspace</span>
+                    </Hov>
+                    {v.wsMenuOpen && (
+                      <>
+                        <div onClick={v.toggleWsMenu} style={css("position:fixed;top:0;right:0;bottom:0;left:0;z-index:8;")}></div>
+                        <div style={css("position:absolute;top:32px;right:0;z-index:9;width:262px;padding:6px;background:#0d0d11;border:1px solid #23232c;border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.5);animation:acaRise .14s ease;max-height:70vh;overflow:auto;")}>
+                          <div style={css("font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:#54545e;padding:6px 8px 5px;")}>Arrangement</div>
+                          {v.layoutOptions.map((opt) => (
+                            <Hov key={opt.id} onClick={opt.onPick} s={"display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:7px;cursor:pointer;color:" + (opt.active ? "var(--accent)" : "#b9b9c2") + ";background:" + (opt.active ? "rgba(var(--accent-rgb),.1)" : "transparent") + ";"} h="background:#15151b;color:#ededf0;">
+                              <LayoutThumb preset={opt.preset} />
+                              <span style={css("flex:1;min-width:0;")}>
+                                <span style={css("display:block;font-size:12px;")}>{opt.name}</span>
+                                <span style={css("display:block;font-size:10px;color:#6a6a74;margin-top:1px;")}>{opt.hint}</span>
+                              </span>
+                              {opt.active && <span style={css("font-size:11px;")}>✓</span>}
+                            </Hov>
+                          ))}
+                          <div style={css("height:1px;background:#1c1c24;margin:6px 4px;")}></div>
+                          <Hov onClick={v.canSaveWs ? v.onSaveWs : undefined} title={v.canSaveWs ? '' : 'Connect at least one pane first'} s={"display:flex;align-items:center;gap:9px;padding:8px;border-radius:7px;font-size:12px;" + (v.canSaveWs ? "cursor:pointer;color:var(--accent);" : "color:#46464f;cursor:not-allowed;")} h={v.canSaveWs ? "background:rgba(var(--accent-rgb),.1);" : ""}>
+                            <span style={css("width:30px;text-align:center;font-size:12px;flex:none;")}>◆</span>
+                            <span style={css("flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.wsSaveLabel}</span>
+                          </Hov>
+                          {v.wsSavedList.length > 0 && (
+                            <>
+                              <div style={css("font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:#54545e;padding:9px 8px 5px;")}>Saved workspaces</div>
+                              {v.wsSavedList.map((w) => (
+                                <Hov key={w.id} onClick={w.onOpen} s={"display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:7px;cursor:pointer;color:" + (w.active ? "var(--accent)" : "#b9b9c2") + ";"} h="background:#15151b;color:#ededf0;">
+                                  <LayoutThumb preset={w.preset} w={26} />
+                                  <span style={css("flex:1;min-width:0;")}>
+                                    <span style={css("display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{w.name}</span>
+                                    <span style={css("display:block;font-size:10px;color:#6a6a74;margin-top:1px;")}>{w.sub}</span>
+                                  </span>
+                                </Hov>
+                              ))}
+                              {v.wsSavedMore > 0 && (<div style={css("font-size:10px;color:#54545e;padding:5px 8px 3px;")}>+{v.wsSavedMore} more on the dashboard</div>)}
+                            </>
+                          )}
+                          <div style={css("font-size:10px;color:#54545e;padding:9px 8px 4px;line-height:1.45;border-top:1px solid #1c1c24;margin-top:6px;")}>Tip: drag a tab onto a pane to fold it in as a split.</div>
+                        </div>
+                      </>
+                    )}
                     <Hov onClick={v.splitRight} title="Split right (⌘D)" s="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8b8b95;cursor:pointer;" h="background:#15151b;color:#ededf0;"><span style={css("display:flex;gap:2px;")}><span style={css("width:5px;height:13px;border:1px solid currentColor;border-radius:2px;")}></span><span style={css("width:5px;height:13px;border:1px solid currentColor;border-radius:2px;")}></span></span></Hov>
                     <Hov onClick={v.splitDown} title="Split down" s="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8b8b95;cursor:pointer;" h="background:#15151b;color:#ededf0;"><span style={css("display:flex;flex-direction:column;gap:2px;")}><span style={css("width:13px;height:5px;border:1px solid currentColor;border-radius:2px;")}></span><span style={css("width:13px;height:5px;border:1px solid currentColor;border-radius:2px;")}></span></span></Hov>
                   </div>
@@ -3093,10 +3910,15 @@ export default class App extends React.Component<any, any> {
                     {tp.panes.map((pane) => (
                       <React.Fragment key={pane.id}>
                       {pane.notFirst && (<div className="aca-resizer" onMouseDown={pane.onGutterDown} style={pane.resizerStyle}><span className="aca-rzbar" style={pane.resizerBar}></span></div>)}
-                      <div onMouseDown={pane.onActivate} style={pane.boxStyle}>
+                      <div onMouseDown={pane.onActivate} onDragOver={pane.onPaneDragOver} onDrop={pane.onPaneDrop} style={pane.boxStyle}>
+                        {pane.dropStyle && (
+                          <div style={pane.dropStyle}>
+                            <span style={{ ...css("font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:5px 11px;border-radius:6px;background:#0b0b0e;"), color: pane.dropBlocked ? '#ff6b78' : 'var(--accent)' }}>{pane.dropLabel}</span>
+                          </div>
+                        )}
                         <div style={pane.headStyle}>
-                          <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:" + (pane.spectate ? "#a970ff" : pane.teamConn ? "#46d9a0" : "#ff7a59") + ";flex:none;")}></span>
-                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.spectate ? "◉ " + (pane.watchName || "viewing") : pane.hostLabel}</span>
+                          <span style={css("width:7px;height:7px;border-radius:2px;transform:rotate(45deg);background:" + (pane.empty ? "#3a3a44" : pane.spectate ? "#a970ff" : pane.teamConn ? "#46d9a0" : "#ff7a59") + ";flex:none;")}></span>
+                          <span style={css("font-size:11px;color:#9a9aa3;")}>{pane.empty ? 'Empty pane' : pane.spectate ? "◉ " + (pane.watchName || "viewing") : pane.hostLabel}</span>
                           {pane.teamConn && pane.teamMembers.length > 0 && (
                             <span title="Teammates live on this connection — click to watch" style={css("display:flex;align-items:center;gap:3px;margin-left:7px;")}>
                               {pane.teamMembers.slice(0, 5).map((mmb, mi) => (
@@ -3105,10 +3927,18 @@ export default class App extends React.Component<any, any> {
                             </span>
                           )}
                           <span style={css("flex:1;")}></span>
-                          <span style={css("font-size:10px;color:#54545e;letter-spacing:.05em;")}>{pane.cwd}</span>
+                          {!pane.empty && (<span style={css("font-size:10px;color:#54545e;letter-spacing:.05em;")}>{pane.cwd}</span>)}
+                          {pane.live && !pane.spectate && (<Hov onMouseDown={pane.onReconnect} title="Reopen this session" s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;font-size:11px;" h="background:#222;color:#ededf0;">↻</Hov>)}
                           <Hov onMouseDown={pane.onClose} s="width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:#54545e;border-radius:4px;cursor:pointer;" h="background:#222;color:#ededf0;">×</Hov>
                         </div>
-                        {pane.live ? (
+                        {pane.empty ? (
+                          <PanePicker
+                            hosts={pane.pickerHosts}
+                            onPick={pane.onFillHost}
+                            onLocal={pane.onFillLocal}
+                            note={pane.missing ? 'This workspace slot points at a connection that no longer exists.' : undefined}
+                          />
+                        ) : pane.live ? (
                           <TermPane key={pane.id + ":t"} session={{ sessionId: pane.sessionId, host: pane.hostObj, secret: pane.secret, keyText: pane.keyText, jump: pane.jump, kind: pane.kind, wsUrl: pane.wsUrl, watchName: pane.watchName }} theme={pane.termTheme} fontSize={pane.fontSize} cursor={pane.cursor} scrollback={pane.scrollback} onConnected={pane.onConnected} onError={pane.onError} onClosed={pane.onClosed} onHostKey={pane.onHostKey} register={this.registerTerm} isBroadcast={this.isBroadcast} onBroadcast={this.broadcastInput} onCwd={pane.onCwd} getTriggers={this.getTriggers} onTrigger={pane.onTrigger} suggest={this.suggestFor} recordCmd={this.recordCmd} suggestCfg={this.suggestCfg} seedHistory={this.seedHistory} />
                         ) : (
                         <div style={pane.termStyle}>
@@ -3264,7 +4094,7 @@ export default class App extends React.Component<any, any> {
                     </div>
                     <div style={css("display:flex;align-items:center;margin-top:11px;")}>
                       <span style={css("font-size:12.5px;font-weight:600;color:#ededf0;flex:1;")}>{th.name}</span>
-                      {th.active && (<span style={css("font-size:9px;letter-spacing:.1em;color:#ff7a59;border:1px solid rgba(255,122,89,.35);border-radius:4px;padding:1px 6px;")}>ACTIVE</span>)}
+                      {th.active && (<span style={css("font-size:9px;letter-spacing:.1em;color:#ff7a59;border:1px solid rgba(var(--accent-rgb),.35);border-radius:4px;padding:1px 6px;")}>ACTIVE</span>)}
                     </div>
                     <div style={css("font-size:10.5px;color:#6a6a74;margin-top:3px;")}>by {th.author}</div>
                     <div style={css("display:flex;gap:4px;margin-top:10px;")}>
@@ -3473,21 +4303,21 @@ export default class App extends React.Component<any, any> {
               <div style={css("flex:1;overflow:auto;padding:20px 22px;display:flex;flex-direction:column;gap:16px;")}>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Label</div>
-                  <Hov as="input" value={v.fName} onChange={v.onFName} placeholder="e.g. production-web" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  <Hov as="input" value={v.fName} onChange={v.onFName} placeholder="e.g. production-web" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                 </div>
                 <div style={css("display:flex;gap:12px;")}>
                   <div style={css("flex:1;")}>
                     <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Host / IP</div>
-                    <Hov as="input" value={v.fHost} onChange={v.onFHost} placeholder="10.0.0.5 or example.com" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <Hov as="input" value={v.fHost} onChange={v.onFHost} placeholder="10.0.0.5 or example.com" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   </div>
                   <div style={css("width:92px;flex:none;")}>
                     <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Port</div>
-                    <Hov as="input" value={v.fPort} onChange={v.onFPort} placeholder="22" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <Hov as="input" value={v.fPort} onChange={v.onFPort} placeholder="22" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   </div>
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Username</div>
-                  <Hov as="input" value={v.fUser} onChange={v.onFUser} placeholder="root" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  <Hov as="input" value={v.fUser} onChange={v.onFUser} placeholder="root" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Authentication</div>
@@ -3497,7 +4327,7 @@ export default class App extends React.Component<any, any> {
                     <div onClick={v.setAuthAgent} style={v.authAgentStyle}>SSH agent</div>
                   </div>
                   {v.authIsPassword && (
-                    <Hov as="input" value={v.fPassword} onChange={v.onFPassword} type="password" placeholder="Password (stored encrypted)" s="width:100%;margin-top:10px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <Hov as="input" value={v.fPassword} onChange={v.onFPassword} type="password" placeholder="Password (stored encrypted)" s="width:100%;margin-top:10px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   )}
                   {v.authIsKey && (
                     <div style={css("margin-top:10px;display:flex;flex-direction:column;gap:9px;")}>
@@ -3509,10 +4339,10 @@ export default class App extends React.Component<any, any> {
                       {v.keyModeFile && (
                         <div style={css("display:flex;flex-direction:column;gap:9px;")}>
                           <div style={css("display:flex;gap:8px;")}>
-                            <Hov as="input" value={v.fKeyPath} onChange={v.onFKeyPath} placeholder="~/.ssh/id_ed25519" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                            <Hov as="input" value={v.fKeyPath} onChange={v.onFKeyPath} placeholder="~/.ssh/id_ed25519" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                             <Hov as="button" onClick={v.onBrowseKey} s="flex:none;padding:0 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Browse…</Hov>
                           </div>
-                          <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                          <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                         </div>
                       )}
                       {v.keyModeText && (
@@ -3524,7 +4354,7 @@ export default class App extends React.Component<any, any> {
                               <span>{v.keyStatusMsg}</span>
                             </div>
                           )}
-                          <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;margin-top:9px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                          <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;margin-top:9px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                           <Hov as="input" value={v.fSaveKeyName} onChange={v.onFSaveKeyName} placeholder="Save to Key Vault as… (optional name)" spellCheck={false} s="width:100%;margin-top:9px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:12.5px;outline:none;" f="border-color:rgba(70,217,160,.5);" />
                         </div>
                       )}
@@ -3538,7 +4368,7 @@ export default class App extends React.Component<any, any> {
                                 <option value="">Choose a saved key…</option>
                                 {v.vaultKeyOptions.map((k) => (<option key={k.id} value={k.id}>{k.label}</option>))}
                               </select>
-                              <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                              <Hov as="input" value={v.fPassphrase} onChange={v.onFPassphrase} type="password" placeholder="Key passphrase (optional)" s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                             </>
                           )}
                           <div onClick={v.openKeys} style={css("font-size:11px;color:#46d9a0;cursor:pointer;")}>Manage saved keys →</div>
@@ -3552,10 +4382,10 @@ export default class App extends React.Component<any, any> {
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Folder</div>
-                  <Hov as="input" value={v.fFolder} onChange={v.onFFolder} placeholder="Production, Personal, …" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  <Hov as="input" value={v.fFolder} onChange={v.onFFolder} placeholder="Production, Personal, …" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   <div style={css("display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;")}>
                     {v.folderChips.map((fc, i) => (
-                      <Hov key={i} onClick={fc.onPick} s="font-size:10.5px;color:#9a9aa3;background:#101015;border:1px solid #20202a;border-radius:6px;padding:4px 9px;cursor:pointer;" h="border-color:rgba(255,122,89,.4);color:#ededf0;">{fc.name}</Hov>
+                      <Hov key={i} onClick={fc.onPick} s="font-size:10.5px;color:#9a9aa3;background:#101015;border:1px solid #20202a;border-radius:6px;padding:4px 9px;cursor:pointer;" h="border-color:rgba(var(--accent-rgb),.4);color:#ededf0;">{fc.name}</Hov>
                     ))}
                   </div>
                 </div>
@@ -3568,14 +4398,14 @@ export default class App extends React.Component<any, any> {
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>On-connect command <span style={css("text-transform:none;letter-spacing:0;color:#54545e;")}>· optional, runs after the shell opens</span></div>
-                  <Hov as="input" value={v.fSnippet} onChange={v.onFSnippet} placeholder="tmux attach || tmux new" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  <Hov as="input" value={v.fSnippet} onChange={v.onFSnippet} placeholder="tmux attach || tmux new" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                 </div>
                 <div>
                   <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;margin-bottom:7px;")}>Tags</div>
-                  <Hov as="input" value={v.fTagInput} onChange={v.onFTagInput} onKeyDown={v.onFTagKey} placeholder="Type a tag and press Enter" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                  <Hov as="input" value={v.fTagInput} onChange={v.onFTagInput} onKeyDown={v.onFTagKey} placeholder="Type a tag and press Enter" spellCheck={false} s="width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   <div style={css("display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;")}>
                     {v.fTags.map((tg, i) => (
-                      <span key={i} style={css("display:flex;align-items:center;gap:6px;font-size:11px;color:#ff7a59;background:rgba(255,122,89,.1);border:1px solid rgba(255,122,89,.35);border-radius:6px;padding:4px 6px 4px 9px;")}>#{tg.name}<span onClick={tg.onRemove} style={css("cursor:pointer;color:#ff7a59;opacity:.7;font-size:13px;line-height:1;")}>×</span></span>
+                      <span key={i} style={css("display:flex;align-items:center;gap:6px;font-size:11px;color:#ff7a59;background:rgba(var(--accent-rgb),.1);border:1px solid rgba(var(--accent-rgb),.35);border-radius:6px;padding:4px 6px 4px 9px;")}>#{tg.name}<span onClick={tg.onRemove} style={css("cursor:pointer;color:#ff7a59;opacity:.7;font-size:13px;line-height:1;")}>×</span></span>
                     ))}
                   </div>
                 </div>
@@ -3636,7 +4466,7 @@ export default class App extends React.Component<any, any> {
                   </div>
                   <div style={css("display:flex;align-items:center;gap:12px;")}>
                     <span style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Scrollback (lines)</span>
-                    <Hov as="input" value={v.scrollback} onChange={v.onScrollback} s="width:120px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <Hov as="input" value={v.scrollback} onChange={v.onScrollback} s="width:120px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                   </div>
                 </div>
 
@@ -3647,17 +4477,17 @@ export default class App extends React.Component<any, any> {
                     <div style={css("display:flex;flex-direction:column;gap:7px;margin-bottom:12px;")}>
                       {v.triggers.map((t) => (
                         <div key={t.id} style={css("display:flex;align-items:center;gap:9px;padding:8px 10px;background:#0e0e12;border:1px solid #1c1c24;border-radius:8px;")}>
-                          <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: t.color || '#ff7a59', flex: 'none' }}></span>
+                          <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: t.color || 'var(--accent)', flex: 'none' }}></span>
                           <code style={css("flex:1;font-size:11.5px;color:#ededf0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{t.pattern}</code>
-                          <Hov onClick={() => v.toggleTriggerNotify(t.id)} title="Notification on match" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.notify !== false ? 'rgba(255,122,89,.5);color:#ff7a59;background:rgba(255,122,89,.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(255,122,89,.6);">🔔 Notify</Hov>
-                          <Hov onClick={() => v.toggleTriggerHighlight(t.id)} title="Highlight the matching line" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.highlight !== false ? 'rgba(255,122,89,.5);color:#ff7a59;background:rgba(255,122,89,.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(255,122,89,.6);">▎Highlight</Hov>
+                          <Hov onClick={() => v.toggleTriggerNotify(t.id)} title="Notification on match" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.notify !== false ? 'rgba(var(--accent-rgb),.5);color:#ff7a59;background:rgba(var(--accent-rgb),.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(var(--accent-rgb),.6);">🔔 Notify</Hov>
+                          <Hov onClick={() => v.toggleTriggerHighlight(t.id)} title="Highlight the matching line" s={"font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid " + (t.highlight !== false ? 'rgba(var(--accent-rgb),.5);color:#ff7a59;background:rgba(var(--accent-rgb),.1)' : '#26262e;color:#6a6a74;background:transparent') + ";"} h="border-color:rgba(var(--accent-rgb),.6);">▎Highlight</Hov>
                           <Hov onClick={() => v.removeTrigger(t.id)} title="Remove" s="width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border-radius:5px;cursor:pointer;flex:none;" h="background:rgba(255,107,120,.15);color:#ff6b78;">×</Hov>
                         </div>
                       ))}
                     </div>
                   )}
                   <div style={css("display:flex;align-items:center;gap:8px;")}>
-                    <Hov as="input" value={v.triggerDraft} onChange={v.onTriggerDraft} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); v.addTrigger(); } }} placeholder="Pattern, e.g.  error|fatal|panic" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(255,122,89,.5);" />
+                    <Hov as="input" value={v.triggerDraft} onChange={v.onTriggerDraft} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); v.addTrigger(); } }} placeholder="Pattern, e.g.  error|fatal|panic" spellCheck={false} s="flex:1;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:8px 11px;color:#ededf0;font:inherit;font-size:12px;outline:none;" f="border-color:rgba(var(--accent-rgb),.5);" />
                     <input type="color" value={v.triggerColor} onChange={v.onTriggerColor} title="Marker colour" style={css("width:30px;height:32px;background:#0e0e12;border:1px solid #20202a;border-radius:7px;padding:2px;cursor:pointer;")} />
                     <Hov as="button" onClick={v.addTrigger} s="padding:8px 14px;background:#ff7a59;border:none;border-radius:7px;color:#0c0b0a;font:inherit;font-size:12px;font-weight:600;cursor:pointer;flex:none;" h="background:#ff8d70;">Add</Hov>
                   </div>
@@ -3782,7 +4612,7 @@ export default class App extends React.Component<any, any> {
           <div onClick={v.rejectHostKey} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:75;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:460px;max-width:96%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
               <div style={css("display:flex;align-items:center;gap:11px;padding:18px 20px 8px;")}>
-                <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(255,122,89,.12);color:#ff7a59;font-size:14px;")}>⚿</span>
+                <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(var(--accent-rgb),.12);color:#ff7a59;font-size:14px;")}>⚿</span>
                 <div style={css("flex:1;")}>
                   <div style={css("font-size:14px;font-weight:700;color:#f2f2f5;")}>Unknown host key</div>
                   <div style={css("font-size:11px;color:#6a6a74;margin-top:1px;")}>{v.hostKeyName} · {v.hostKeyTarget}</div>
@@ -3821,7 +4651,7 @@ export default class App extends React.Component<any, any> {
                 </div>
                 <div style={css("display:flex;align-items:center;gap:12px;")}>
                   <div style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Favorite <span style={css("color:#54545e;")}>· show at top</span></div>
-                  <div onClick={v.toggleFolderEditFav} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.folderEditFav ? '#ff7a59' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
+                  <div onClick={v.toggleFolderEditFav} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.folderEditFav ? 'var(--accent)' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
                     <span style={{ position: 'absolute', top: '2px', left: v.folderEditFav ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
                   </div>
                 </div>
@@ -3939,7 +4769,7 @@ export default class App extends React.Component<any, any> {
         {/* VAULT LOCKED */}
         {v.locked && (
           <div style={css("position:absolute;inset:0;background:#09090b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:95;animation:acaFade .15s ease;")}>
-            <span style={css("width:34px;height:34px;background:#ff7a59;border-radius:8px;transform:rotate(45deg);box-shadow:0 0 24px rgba(255,122,89,.5);")}></span>
+            <span style={css("width:34px;height:34px;background:#ff7a59;border-radius:8px;transform:rotate(45deg);box-shadow:0 0 24px rgba(var(--accent-rgb),.5);")}></span>
             <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:6px;")}>{PRODUCT.name} is locked</div>
             <div style={css("font-size:11.5px;color:#6a6a74;")}>Enter your vault passphrase to unlock.</div>
             <div style={css("display:flex;gap:8px;margin-top:4px;")}>
@@ -3962,6 +4792,93 @@ export default class App extends React.Component<any, any> {
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.ioCancel} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
                 <Hov as="button" onClick={v.ioSubmit} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">{v.ioCta}</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SAVE / EDIT WORKSPACE */}
+        {v.wsPromptOpen && (
+          <div onClick={v.wsPrompt.onCancel} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:80;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:440px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("padding:18px 20px 6px;display:flex;align-items:center;gap:9px;")}>
+                <span style={css("font-size:13px;color:var(--accent);")}>◆</span>
+                <span style={css("font-size:14px;font-weight:700;color:#f2f2f5;")}>{v.wsPrompt.title}</span>
+              </div>
+              <div style={css("padding:0 20px 6px;font-size:11.5px;color:#8b8b95;line-height:1.55;")}>Reopen this exact set of terminals in one click from the dashboard.</div>
+              <div style={css("padding:12px 20px 18px;display:flex;flex-direction:column;gap:12px;")}>
+                <label style={css("display:flex;flex-direction:column;gap:6px;")}>
+                  <span style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;")}>Name</span>
+                  <input value={v.wsPrompt.name} onChange={v.wsPrompt.onName} autoFocus spellCheck={false} placeholder="e.g. Prod triage" style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 12px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:6px;")}>
+                  <span style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;")}>Labels</span>
+                  <input value={v.wsPrompt.tagInput} onChange={v.wsPrompt.onTagInput} onKeyDown={v.wsPrompt.onTagKey} spellCheck={false} placeholder="Type a label, press Enter" style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 12px;color:#ededf0;font:inherit;font-size:12.5px;outline:none;")} />
+                  {v.wsPrompt.tags.length > 0 && (
+                    <span style={css("display:flex;flex-wrap:wrap;gap:6px;")}>
+                      {v.wsPrompt.tags.map((t) => (
+                        <Hov key={t} onClick={() => v.wsPrompt.onRemoveTag(t)} title="Remove label" s="display:flex;align-items:center;gap:5px;font-size:10.5px;color:#b9b9c2;background:#15151b;border:1px solid #26262e;border-radius:20px;padding:3px 9px;cursor:pointer;" h="border-color:rgba(255,107,120,.45);color:#ff6b78;">#{t} ×</Hov>
+                      ))}
+                    </span>
+                  )}
+                </label>
+                <label style={css("display:flex;flex-direction:column;gap:6px;")}>
+                  <span style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;")}>Folder</span>
+                  <input value={v.wsPrompt.folder} onChange={v.wsPrompt.onFolder} spellCheck={false} placeholder="Workspaces" style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 12px;color:#ededf0;font:inherit;font-size:12.5px;outline:none;")} />
+                  {v.wsPrompt.folderSuggestions.length > 0 && (
+                    <span style={css("display:flex;flex-wrap:wrap;gap:6px;")}>
+                      {v.wsPrompt.folderSuggestions.map((n) => (
+                        <Hov key={n} onClick={() => v.wsPrompt.onPickFolder(n)} s="font-size:10.5px;color:#9a9aa3;background:#101015;border:1px solid #20202a;border-radius:6px;padding:3px 8px;cursor:pointer;" h="border-color:rgba(var(--accent-rgb),.45);color:#ededf0;">{n}</Hov>
+                      ))}
+                    </span>
+                  )}
+                </label>
+                {v.wsPrompt.teamOptions.length > 0 && (
+                  <div style={css("display:flex;flex-direction:column;gap:7px;")}>
+                    <span style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;")}>Who can use it</span>
+                    <Hov onClick={() => v.wsPrompt.onShare('team')} s={"display:flex;align-items:flex-start;gap:9px;padding:10px 11px;border-radius:9px;cursor:pointer;border:1px solid " + (v.wsPrompt.share === 'team' ? "rgba(70,217,160,.55)" : "#20202a") + ";background:" + (v.wsPrompt.share === 'team' ? "rgba(70,217,160,.08)" : "#0e0e12") + ";"} h="border-color:rgba(70,217,160,.45);">
+                      <span style={css("width:13px;height:13px;border-radius:50%;flex:none;margin-top:1px;border:1.5px solid " + (v.wsPrompt.share === 'team' ? "#46d9a0" : "#3a3a44") + ";background:" + (v.wsPrompt.share === 'team' ? "#46d9a0" : "transparent") + ";")}></span>
+                      <span style={css("flex:1;min-width:0;")}>
+                        <span style={css("display:block;font-size:12.5px;color:#ededf0;font-weight:600;")}>Team workspace{v.wsPrompt.shareTeamName ? ' · ' + v.wsPrompt.shareTeamName : ''}</span>
+                        <span style={css("display:block;font-size:11px;color:#8b8b95;margin-top:3px;line-height:1.5;")}>Every member can open it. <span style={css("color:#ffb020;")}>Connections in it that aren’t shared yet get uploaded to the team (end-to-end encrypted), so teammates can connect too.</span></span>
+                      </span>
+                    </Hov>
+                    <Hov onClick={() => v.wsPrompt.onShare('private')} s={"display:flex;align-items:flex-start;gap:9px;padding:10px 11px;border-radius:9px;cursor:pointer;border:1px solid " + (v.wsPrompt.share === 'private' ? "rgba(var(--accent-rgb),.55)" : "#20202a") + ";background:" + (v.wsPrompt.share === 'private' ? "rgba(var(--accent-rgb),.07)" : "#0e0e12") + ";"} h="border-color:rgba(var(--accent-rgb),.45);">
+                      <span style={css("width:13px;height:13px;border-radius:50%;flex:none;margin-top:1px;border:1.5px solid " + (v.wsPrompt.share === 'private' ? "var(--accent)" : "#3a3a44") + ";background:" + (v.wsPrompt.share === 'private' ? "var(--accent)" : "transparent") + ";")}></span>
+                      <span style={css("flex:1;min-width:0;")}>
+                        <span style={css("display:block;font-size:12.5px;color:#ededf0;font-weight:600;")}>Just for me</span>
+                        <span style={css("display:block;font-size:11px;color:#8b8b95;margin-top:3px;line-height:1.5;")}>Stays on this device, filed under <span style={css("color:#b9b9c2;")}>Others</span>. Nothing is uploaded.</span>
+                      </span>
+                    </Hov>
+                    {v.wsPrompt.teamOptions.length > 1 && v.wsPrompt.share === 'team' && (
+                      <span style={css("display:flex;flex-wrap:wrap;gap:6px;")}>
+                        {v.wsPrompt.teamOptions.map((t) => (
+                          <Hov key={t.teamId} onClick={() => v.wsPrompt.onPickShareTeam(t.teamId)} s={"font-size:10.5px;border-radius:6px;padding:3px 8px;cursor:pointer;border:1px solid " + (t.teamId === v.wsPrompt.shareTeamId ? "rgba(70,217,160,.5)" : "#20202a") + ";color:" + (t.teamId === v.wsPrompt.shareTeamId ? "#46d9a0" : "#9a9aa3") + ";"} h="color:#ededf0;">{t.teamName}</Hov>
+                        ))}
+                      </span>
+                    )}
+                    {v.wsPrompt.alreadyShared && (<span style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Already shared with this team — saving updates your local copy.</span>)}
+                  </div>
+                )}
+                {v.wsPrompt.panes.length > 0 && (
+                  <div style={css("background:#0e0e12;border:1px solid #1c1c24;border-radius:9px;padding:10px 12px;")}>
+                    <div style={css("font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#54545e;margin-bottom:6px;")}>This workspace opens</div>
+                    {v.wsPrompt.panes.map((p, pi) => (
+                      <div key={pi} style={css("display:flex;align-items:center;gap:8px;font-size:11.5px;color:#b9b9c2;padding:2px 0;")}>
+                        <span style={css("font-size:9.5px;color:#54545e;width:16px;flex:none;")}>{pi + 1}</span>
+                        <span style={css("flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={css("display:flex;align-items:center;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                {v.wsPrompt.canDelete && (
+                  <Hov as="button" onClick={v.wsPrompt.onDelete} s="padding:9px 14px;background:transparent;border:1px solid rgba(255,107,120,.35);border-radius:8px;color:#ff6b78;font:inherit;font-size:12.5px;cursor:pointer;" h="background:rgba(255,107,120,.1);">Delete</Hov>
+                )}
+                <span style={css("flex:1;")}></span>
+                <Hov as="button" onClick={v.wsPrompt.onCancel} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">{v.wsPrompt.editing ? 'Cancel' : 'Not now'}</Hov>
+                <Hov as="button" onClick={v.wsPrompt.onSubmit} s="padding:9px 16px;background:var(--accent);border:none;border-radius:8px;color:var(--accent-ink);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="filter:brightness(1.1);">{v.wsPrompt.editing ? 'Save changes' : 'Save workspace'}</Hov>
               </div>
             </div>
           </div>
@@ -4065,9 +4982,9 @@ export default class App extends React.Component<any, any> {
         {/* MCP COMMAND APPROVAL */}
         {v.approvalOpen && (
           <div style={css("position:absolute;inset:0;background:rgba(5,5,7,.72);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:90;animation:acaFade .12s ease;")}>
-            <div style={css("width:500px;max-width:96%;background:#0c0c10;border:1px solid rgba(255,122,89,.4);border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+            <div style={css("width:500px;max-width:96%;background:#0c0c10;border:1px solid rgba(var(--accent-rgb),.4);border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
               <div style={css("display:flex;align-items:center;gap:11px;padding:18px 20px 8px;")}>
-                <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(255,122,89,.12);color:#ff7a59;font-size:14px;")}>›_</span>
+                <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(var(--accent-rgb),.12);color:#ff7a59;font-size:14px;")}>›_</span>
                 <div style={css("flex:1;")}>
                   <div style={css("font-size:14px;font-weight:700;color:#f2f2f5;")}>Agent wants to run a command</div>
                   <div style={css("font-size:11px;color:#6a6a74;margin-top:1px;")}>on <span style={css("color:#cfcfd6;")}>{v.approvalHost}</span></div>
@@ -4093,7 +5010,7 @@ export default class App extends React.Component<any, any> {
               <div style={css("padding:8px 20px 14px;font-size:12px;color:#cfcfd6;line-height:1.55;")}><span style={css("color:#ededf0;font-weight:600;")}>{v.conflictName}</span> already exists in <span style={css("color:#9a9aa3;")}>{v.conflictDest}</span>. Replace it or skip?</div>
               <div style={css("display:flex;align-items:center;gap:12px;padding:0 20px 14px;")}>
                 <div style={css("flex:1;font-size:12px;color:#cfcfd6;")}>Apply to all</div>
-                <div onClick={v.toggleConflictAll} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.conflictAll ? '#ff7a59' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
+                <div onClick={v.toggleConflictAll} style={{ width: '38px', height: '22px', borderRadius: '11px', background: v.conflictAll ? 'var(--accent)' : '#26262e', position: 'relative', cursor: 'pointer', flex: 'none' }}>
                   <span style={{ position: 'absolute', top: '2px', left: v.conflictAll ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
                 </div>
               </div>
