@@ -30,6 +30,11 @@ relicensed Apache-2.0. Change a **local** feature → it should be portable to c
 
 ## CI / release
 `ci.yml` (Vite build) + `release.yml` (tag → installers), plus `homebrew.yml` (needs a tap +
-`HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.7.4` are preserved. Release/signing secrets are
-not yet configured here (releases historically ran from `TanvirMahin24/sshache`). See the
-`cut-release` skill.
+`HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.8.0` are preserved. See the `cut-release` skill.
+
+**This repo is private, and that constrains everything user-facing.** Its release assets 404 for
+unauthenticated clients, so `release.yml` mirrors installers to the **public** downloads repo
+(`SSH-Ache/downloads`; override via the `PUBLIC_DOWNLOADS_REPO` repo variable). The Homebrew cask,
+the website's download links, and the app's in-app update check (`UPDATE_REPO` in `src/App.tsx`)
+must all point at that public repo — never at this one. Teams is closed-source: don't add
+"source-available / read the code" claims for the Teams app to any public surface.

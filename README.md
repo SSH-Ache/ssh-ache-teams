@@ -3,16 +3,16 @@
 <p align="center">A desktop SSH client with a clean terminal UI — connections, SFTP, port forwarding, and an approval-gated AI agent bridge, with your data kept on your machine and encrypted at rest.</p>
 
 <p align="center">
-  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases"><img src="https://img.shields.io/github/v/release/SSH-Ache/ssh-ache-teams?color=ff5f6d&label=release" alt="Latest release"></a>
+  <a href="https://github.com/SSH-Ache/downloads/releases"><img src="https://img.shields.io/github/v/release/SSH-Ache/downloads?color=ff5f6d&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-ff7a59" alt="Platforms: macOS, Windows, Linux">
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-ff8a63" alt="Built with Tauri 2">
-  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases"><img src="https://img.shields.io/github/downloads/SSH-Ache/ssh-ache-teams/total?color=46d9a0&label=downloads" alt="Total downloads"></a>
+  <a href="https://github.com/SSH-Ache/downloads/releases"><img src="https://img.shields.io/github/downloads/SSH-Ache/downloads/total?color=46d9a0&label=downloads" alt="Total downloads"></a>
 </p>
 
 <p align="center">
   <a href="https://sshache.com">Website</a> ·
   <a href="https://sshache.com/docs">Docs</a> ·
-  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases">Releases</a> ·
+  <a href="https://github.com/SSH-Ache/downloads/releases">Releases</a> ·
   <a href="https://github.com/SSH-Ache/ssh-ache-teams/issues/new">Report a bug</a>
 </p>
 
@@ -44,12 +44,12 @@
 ### Homebrew (macOS)
 
 ```sh
-brew install --cask SSH-Ache/sshache/sshache
+brew install --cask SSH-Ache/sshache/sshache-teams
 ```
 
 ### Direct download
 
-Grab the latest platform build — `.dmg` (macOS), `.msi` (Windows), or `.AppImage` / `.deb` (Linux) — from the [Releases](https://github.com/SSH-Ache/ssh-ache-teams/releases) page.
+Grab the latest platform build — `.dmg` (macOS), `.msi` (Windows), or `.AppImage` / `.deb` (Linux) — from the [Releases](https://github.com/SSH-Ache/downloads/releases) page.
 
 ### Build from source
 
