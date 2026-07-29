@@ -32,9 +32,14 @@ relicensed Apache-2.0. Change a **local** feature → it should be portable to c
 `ci.yml` (Vite build) + `release.yml` (tag → installers), plus `homebrew.yml` (needs a tap +
 `HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.8.0` are preserved. See the `cut-release` skill.
 
-**This repo is private, and that constrains everything user-facing.** Its release assets 404 for
-unauthenticated clients, so `release.yml` mirrors installers to the **public** downloads repo
-(`SSH-Ache/downloads`; override via the `PUBLIC_DOWNLOADS_REPO` repo variable). The Homebrew cask,
-the website's download links, and the app's in-app update check (`UPDATE_REPO` in `src/App.tsx`)
-must all point at that public repo — never at this one. Teams is closed-source: don't add
-"source-available / read the code" claims for the Teams app to any public surface.
+⚠️ **This repo must stay PUBLIC.** While it was private its release assets 404'd for
+unauthenticated clients, which silently broke three things: the Homebrew cask (the workflow hashed
+the 9-byte `Not Found` body, shipping `sha256("Not Found")` in v0.7.5 and v0.8.0), the in-app
+update check (`UPDATE_REPO` in `src/App.tsx`), and every download link on the website. If it is
+ever made private again, all three break again. `homebrew.yml` now fails loudly rather than
+publishing a cask for an unfetchable URL.
+
+## Licence
+Dual-licensed — see `LICENSING.md`. Public source under PolyForm Noncommercial (free for
+noncommercial use); **commercial use needs a separate paid licence**. Don't describe it as "open
+source" or imply free commercial use — the Apache-2.0 community edition is the permissive one.

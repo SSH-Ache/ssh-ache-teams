@@ -3,16 +3,16 @@
 <p align="center">A desktop SSH client with a clean terminal UI — connections, SFTP, port forwarding, and an approval-gated AI agent bridge, with your data kept on your machine and encrypted at rest.</p>
 
 <p align="center">
-  <a href="https://github.com/SSH-Ache/downloads/releases"><img src="https://img.shields.io/github/v/release/SSH-Ache/downloads?color=ff5f6d&label=release" alt="Latest release"></a>
+  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases"><img src="https://img.shields.io/github/v/release/SSH-Ache/ssh-ache-teams?color=ff5f6d&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-ff7a59" alt="Platforms: macOS, Windows, Linux">
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-ff8a63" alt="Built with Tauri 2">
-  <a href="https://github.com/SSH-Ache/downloads/releases"><img src="https://img.shields.io/github/downloads/SSH-Ache/downloads/total?color=46d9a0&label=downloads" alt="Total downloads"></a>
+  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases"><img src="https://img.shields.io/github/downloads/SSH-Ache/ssh-ache-teams/total?color=46d9a0&label=downloads" alt="Total downloads"></a>
 </p>
 
 <p align="center">
   <a href="https://sshache.com">Website</a> ·
   <a href="https://sshache.com/docs">Docs</a> ·
-  <a href="https://github.com/SSH-Ache/downloads/releases">Releases</a> ·
+  <a href="https://github.com/SSH-Ache/ssh-ache-teams/releases">Releases</a> ·
   <a href="https://github.com/SSH-Ache/ssh-ache-teams/issues/new">Report a bug</a>
 </p>
 
@@ -49,7 +49,7 @@ brew install --cask SSH-Ache/sshache/sshache-teams
 
 ### Direct download
 
-Grab the latest platform build — `.dmg` (macOS), `.msi` (Windows), or `.AppImage` / `.deb` (Linux) — from the [Releases](https://github.com/SSH-Ache/downloads/releases) page.
+Grab the latest platform build — `.dmg` (macOS), `.msi` (Windows), or `.AppImage` / `.deb` (Linux) — from the [Releases](https://github.com/SSH-Ache/ssh-ache-teams/releases) page.
 
 ### Build from source
 
@@ -75,7 +75,12 @@ Tauri 2 (Rust backend) · React + xterm.js (frontend) · russh / russh-sftp · p
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE). You may use, modify, and share SSH Ache for **any noncommercial purpose** — personal use, research, education, hobby projects. **Commercial use of any kind requires a separate commercial license** (written permission). For commercial licensing, email [hello@sshache.com](mailto:hello@sshache.com).
+**Dual-licensed** — see [LICENSING.md](./LICENSING.md) for the full picture.
+
+- **Noncommercial use is free**, under the [PolyForm Noncommercial License 1.0.0](./LICENSE): personal use, research, education, hobby projects. Read it, build it, modify it, self-host it.
+- **Commercial use requires a separate paid commercial license** — using it at work, inside a company, or to deliver a paid product or service. Email [hello@sshache.com](mailto:hello@sshache.com).
+
+Want a permissively licensed build you can use commercially with no permission at all? That's the **[community edition](https://github.com/SSH-Ache/ssh-ache)** — Apache-2.0, individual use, no team or server code.
 
 ## Support
 

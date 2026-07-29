@@ -9,10 +9,6 @@ on:
       - "v*"
   workflow_dispatch:
 
-env:
-  # Public repo the installers are mirrored to (this repo is private — see the publish job).
-  PUBLIC_REPO: ${{ vars.PUBLIC_DOWNLOADS_REPO || 'SSH-Ache/downloads' }}
-
 jobs:
   build:
     permissions:
@@ -66,49 +62,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "SSH Ache Teams ${{ github.ref_name }}"
-          releaseBody: "Internal build record. Public installers live on ${{ env.PUBLIC_REPO }}."
+          releaseBody: "SSH Ache **Teams** — the commercial edition (E2EE team sharing, plans & billing). Download the installer for your platform below. macOS users can also `brew install --cask SSH-Ache/sshache/sshache-teams`. Looking for the individual, Apache-2.0 build you can use commercially with no permission? That's [SSH-Ache/ssh-ache](https://github.com/SSH-Ache/ssh-ache)."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
-  # This repo is PRIVATE, so its release assets 404 for everyone without a token — an
-  # unauthenticated `curl` of a browser_download_url here returns the 9-byte body "Not Found".
-  # Installers are therefore mirrored to a PUBLIC downloads repo, which is what the website and
-  # the Homebrew cask point at. Everything user-facing must reference PUBLIC_REPO, never this one.
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Mirror installers to the public downloads repo
-        env:
-          TAG: ${{ github.ref_name }}
-          SRC_REPO: ${{ github.repository }}
-          PUBLIC_REPO: ${{ vars.PUBLIC_DOWNLOADS_REPO || 'SSH-Ache/downloads' }}
-          # PAT with contents:write on PUBLIC_REPO. A classic `repo`-scoped token works for both
-          # this and the Homebrew tap, so HOMEBREW_TAP_TOKEN can be reused.
-          PUBLIC_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN || secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PUBLIC_TOKEN:-}" ]; then
-            echo "::error::PUBLIC_RELEASE_TOKEN (or HOMEBREW_TAP_TOKEN) is not set — cannot publish installers publicly."
-            exit 1
-          fi
-          mkdir -p out && cd out
-          # Authenticated download from THIS (private) repo.
-          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release download "$TAG" --repo "$SRC_REPO" \
-            --pattern '*.dmg' --pattern '*.msi' --pattern '*.exe' \
-            --pattern '*.AppImage' --pattern '*.deb' --pattern '*.rpm' --pattern '*.tar.gz'
-          # Fail loudly rather than publishing an empty or truncated release.
-          count=$(ls -1 | wc -l)
-          echo "Downloaded $count asset(s):"; ls -l
-          [ "$count" -ge 4 ] || { echo "::error::Expected at least 4 installers, got $count"; exit 1; }
-          for f in *; do
-            sz=$(stat -c%s "$f")
-            [ "$sz" -ge 100000 ] || { echo "::error::$f is only $sz bytes — refusing to publish"; exit 1; }
-          done
-          GH_TOKEN="$PUBLIC_TOKEN" gh release create "$TAG" ./* \
-            --repo "$PUBLIC_REPO" \
-            --title "SSH Ache Teams $TAG" \
-            --notes "SSH Ache **Teams** — the commercial edition (E2EE team sharing, plans & billing). Download the installer for your platform below. macOS users can also \`brew install --cask SSH-Ache/sshache/sshache-teams\`. Looking for the individual, Apache-2.0 build? That's [SSH-Ache/ssh-ache](https://github.com/SSH-Ache/ssh-ache)."

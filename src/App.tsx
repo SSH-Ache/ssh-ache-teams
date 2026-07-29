@@ -131,9 +131,9 @@ const PRODUCT = {
   community: "https://github.com/SSH-Ache/ssh-ache",
 };
 
-// Teams installers are published to a PUBLIC downloads repo; this source repo is private, so it
-// can't serve update checks or download links to installed clients.
-const UPDATE_REPO = "SSH-Ache/downloads";
+// Repo the in-app update check reads releases from. MUST be a PUBLIC repo — an installed client
+// is unauthenticated, so a private repo's releases API returns 404 and updates silently never appear.
+const UPDATE_REPO = "SSH-Ache/ssh-ache-teams";
 
 // Teams chrome palette — deliberately violet, where the community edition is orange. Applied
 // only to Teams surfaces (badge, plan pill, Teams panel) so user themes still own the terminal.
@@ -1150,8 +1150,7 @@ export default class App extends React.Component<any, any> {
     if (this.state.updateChecking) return;
     this.setState({ updateChecking: true });
     try {
-      // MUST be the public downloads repo. This source repo is private, so its releases API
-      // returns 404 for an unauthenticated client — i.e. every installed copy of the app.
+      // UPDATE_REPO must be public — see its definition.
       const res = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const j = await res.json();

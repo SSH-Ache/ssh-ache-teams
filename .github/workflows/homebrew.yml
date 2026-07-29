@@ -5,16 +5,15 @@ name: homebrew
 # SSH-Ache/sshache/sshache-teams` always points at the newest macOS build.
 # (The community edition owns the `sshache` cask; this Teams build is `sshache-teams`.)
 #
-# The cask's url/sha256 come from the PUBLIC downloads repo (release.yml mirrors the installers
-# there), NOT from this private repo — a private repo's download URL 404s for Homebrew clients.
+# THIS REPO MUST STAY PUBLIC for the cask to work. While it was private, the download URL 404'd
+# for unauthenticated clients and the unguarded `curl` below wrote that 9-byte "Not Found" body to
+# app.dmg and hashed it — shipping casks (v0.7.5, v0.8.0) whose sha256 was sha256("Not Found") and
+# whose url nobody could fetch. The size + anonymous-200 checks below exist to fail loudly instead.
 #
 # Prerequisites (one-time):
 #   1. Create the tap repo: https://github.com/SSH-Ache/homebrew-sshache
-#   2. Create the public downloads repo (default SSH-Ache/downloads, override with the repo
-#      variable PUBLIC_DOWNLOADS_REPO).
-#   3. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on the tap repo
-#      (classic `repo` scope, or a fine-grained token). release.yml reuses it to publish the
-#      installers unless PUBLIC_RELEASE_TOKEN is set separately.
+#   2. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on the tap repo
+#      (classic `repo` scope, or a fine-grained token).
 on:
   release:
     types: [released]
@@ -54,20 +53,14 @@ jobs:
       - name: Resolve macOS asset + checksum
         id: asset
         if: steps.gate.outputs.has_token == 'true'
-        env:
-          # Resolve from the PUBLIC downloads repo, not this private one. A private repo's
-          # browser_download_url 404s for unauthenticated clients, and `curl` would happily
-          # write that 9-byte "Not Found" body to app.dmg and hash it — publishing a cask whose
-          # sha256 is sha256("Not Found") and whose url nobody can fetch. Guarded below.
-          PUBLIC_REPO: ${{ vars.PUBLIC_DOWNLOADS_REPO || 'SSH-Ache/downloads' }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          url=$(gh release view "$TAG" --repo "$PUBLIC_REPO" \
+          url=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
             --json assets \
             --jq '.assets[] | select(.name | endswith(".dmg")) | .url' | head -n1)
           if [ -z "$url" ]; then
-            echo "::error::No .dmg asset found on $PUBLIC_REPO release $TAG"; exit 1
+            echo "::error::No .dmg asset found on release $TAG"; exit 1
           fi
           echo "Downloading $url"
           # -f: fail on HTTP >=400 instead of saving the error body.
