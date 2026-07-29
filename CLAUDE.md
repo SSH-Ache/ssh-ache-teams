@@ -12,11 +12,31 @@ Everything in the community `ssh-ache` guide applies (same Tauri/React/Rust stac
   (the `base` const); the app never lets the user type a backend URL. Bearer-token auth,
   refresh-on-401.
 - `TeamsPanel.tsx` — the Teams tab (sign in / device-link, teams, members, invites, sync).
+- **Session persistence** — the app stays signed in across launches: `client.ts` keeps the 64-byte
+  identity secret + the rotating refresh token in the **OS keychain** (`secret_set` id
+  `teams.session`), restores it via `restoreSession()` from `componentDidMount`, and re-saves on
+  every token refresh. Signing out (sidebar account row or the Teams tab) wipes that entry.
 - `crypto/` — the E2EE layer (X25519/Ed25519 identities, Team Key sealed to each member,
   per-connection DEK; `@noble/*`). **The wire format is frozen and shared with the platform web
   client — do not change it casually** (guarded by known-answer tests).
 - Woven into `src/App.tsx`: the Teams tab, device linking, live presence, spectate/mirror (watch a
   teammate's session through the relay), auto-sync of shared connections.
+
+## Team workspaces
+Workspaces (saved multi-connection tabs — see the community guide for the model) can be **shared**
+here. When a workspace is built on team connections, the save modal asks: *Team workspace* or *Just
+for me* (the latter files it under `Others`, nothing uploaded).
+- Sharing (`_shareWorkspace`) first uploads any member connection that isn't shared yet
+  (`shareHostToTeam`), so teammates can actually connect, then stores the **arrangement itself as a
+  team connection record** whose sealed meta carries `kind: 'workspace'` + `workspace.slots` keyed
+  by cloud `connId`. `syncTeam` routes `meta.kind === 'workspace'` to `_upsertTeamWorkspace`
+  instead of `_upsertTeamHost`, and prunes both.
+- ⚠️ The meta is only ever ciphertext to the server, but the **platform web client will decrypt and
+  list a workspace record as if it were a connection** until it learns about `kind: 'workspace'`.
+  That is the one place this feature reaches outside the desktop app — teach the web client to skip
+  or render these before promoting it.
+- Deleting a shared workspace locally is not a team delete: it returns on the next sync (there is no
+  `deleteConnection` in `client.ts` yet). The toast says so.
 
 ## Key invariant
 Zero-knowledge: the server only ever receives ciphertext + wrapped keys. **Never send a plaintext
