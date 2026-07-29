@@ -44,7 +44,7 @@
 ### Homebrew (macOS)
 
 ```sh
-brew install --cask SSH-Ache/sshache/sshache
+brew install --cask SSH-Ache/sshache/sshache-teams
 ```
 
 ### Direct download
@@ -75,7 +75,12 @@ Tauri 2 (Rust backend) · React + xterm.js (frontend) · russh / russh-sftp · p
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE). You may use, modify, and share SSH Ache for **any noncommercial purpose** — personal use, research, education, hobby projects. **Commercial use of any kind requires a separate commercial license** (written permission). For commercial licensing, email [hello@sshache.com](mailto:hello@sshache.com).
+**Dual-licensed** — see [LICENSING.md](./LICENSING.md) for the full picture.
+
+- **Noncommercial use is free**, under the [PolyForm Noncommercial License 1.0.0](./LICENSE): personal use, research, education, hobby projects. Read it, build it, modify it, self-host it.
+- **Commercial use requires a separate paid commercial license** — using it at work, inside a company, or to deliver a paid product or service. Email [hello@sshache.com](mailto:hello@sshache.com).
+
+Want a permissively licensed build you can use commercially with no permission at all? That's the **[community edition](https://github.com/SSH-Ache/ssh-ache)** — Apache-2.0, individual use, no team or server code.
 
 ## Support
 

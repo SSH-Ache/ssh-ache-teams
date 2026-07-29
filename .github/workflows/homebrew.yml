@@ -5,10 +5,15 @@ name: homebrew
 # SSH-Ache/sshache/sshache-teams` always points at the newest macOS build.
 # (The community edition owns the `sshache` cask; this Teams build is `sshache-teams`.)
 #
+# THIS REPO MUST STAY PUBLIC for the cask to work. While it was private, the download URL 404'd
+# for unauthenticated clients and the unguarded `curl` below wrote that 9-byte "Not Found" body to
+# app.dmg and hashed it — shipping casks (v0.7.5, v0.8.0) whose sha256 was sha256("Not Found") and
+# whose url nobody could fetch. The size + anonymous-200 checks below exist to fail loudly instead.
+#
 # Prerequisites (one-time):
 #   1. Create the tap repo: https://github.com/SSH-Ache/homebrew-sshache
-#   2. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on
-#      that tap repo (classic `repo` scope, or a fine-grained token).
+#   2. Add a repo secret HOMEBREW_TAP_TOKEN — a PAT with `contents:write` on the tap repo
+#      (classic `repo` scope, or a fine-grained token).
 on:
   release:
     types: [released]
@@ -51,7 +56,6 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          # Pick the universal .dmg from the release assets.
           url=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
             --json assets \
             --jq '.assets[] | select(.name | endswith(".dmg")) | .url' | head -n1)
@@ -59,8 +63,20 @@ jobs:
             echo "::error::No .dmg asset found on release $TAG"; exit 1
           fi
           echo "Downloading $url"
-          curl -sSL "$url" -o app.dmg
+          # -f: fail on HTTP >=400 instead of saving the error body.
+          curl -fsSL "$url" -o app.dmg
+          size=$(stat -c%s app.dmg)
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::Downloaded dmg is only ${size} bytes — refusing to publish a cask for it."
+            head -c 200 app.dmg; exit 1
+          fi
+          # The URL in the cask must be fetchable by an anonymous Homebrew client.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -L "$url")
+          if [ "$code" != "200" ]; then
+            echo "::error::$url returns HTTP $code anonymously — the cask would be uninstallable."; exit 1
+          fi
           sha=$(sha256sum app.dmg | cut -d' ' -f1)
+          echo "Verified ${size} bytes, sha256 ${sha}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "url=$url"         >> "$GITHUB_OUTPUT"
           echo "sha=$sha"         >> "$GITHUB_OUTPUT"

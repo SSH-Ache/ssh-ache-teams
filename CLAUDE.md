@@ -30,6 +30,16 @@ relicensed Apache-2.0. Change a **local** feature → it should be portable to c
 
 ## CI / release
 `ci.yml` (Vite build) + `release.yml` (tag → installers), plus `homebrew.yml` (needs a tap +
-`HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.7.4` are preserved. Release/signing secrets are
-not yet configured here (releases historically ran from `TanvirMahin24/sshache`). See the
-`cut-release` skill.
+`HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.8.0` are preserved. See the `cut-release` skill.
+
+⚠️ **This repo must stay PUBLIC.** While it was private its release assets 404'd for
+unauthenticated clients, which silently broke three things: the Homebrew cask (the workflow hashed
+the 9-byte `Not Found` body, shipping `sha256("Not Found")` in v0.7.5 and v0.8.0), the in-app
+update check (`UPDATE_REPO` in `src/App.tsx`), and every download link on the website. If it is
+ever made private again, all three break again. `homebrew.yml` now fails loudly rather than
+publishing a cask for an unfetchable URL.
+
+## Licence
+Dual-licensed — see `LICENSING.md`. Public source under PolyForm Noncommercial (free for
+noncommercial use); **commercial use needs a separate paid licence**. Don't describe it as "open
+source" or imply free commercial use — the Apache-2.0 community edition is the permissive one.
