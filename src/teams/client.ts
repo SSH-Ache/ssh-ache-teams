@@ -455,3 +455,51 @@ export async function createConnection(teamId: string, meta: TeamConnMeta, secre
 
 // The user's personal vault team (a single-member isPersonal team), if signed in.
 export const personalTeamId = (): string | null => cachedMemberships.find((m) => m.isPersonal)?.teamId ?? null;
+
+// ---- Plan, limits & billing ----------------------------------------------
+// The server is the source of truth (entitlementsFor(planTier) in @sshache/shared). The app
+// never decides a plan locally — it renders what these endpoints return.
+//
+// NOTE: unlimited limits are `Infinity` server-side, which JSON.stringify turns into `null`.
+// Treat null/absent as unlimited.
+
+export interface Subscription {
+  plan: string; // effective plan tier: FREE | PRO | ENTERPRISE
+  status: string;
+  billableSeats: number;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+}
+export interface Entitlements {
+  plan: string;
+  limits: {
+    maxMembers: number | null;
+    maxConnections: number | null;
+    auditRetentionDays: number | null;
+    connectionHistoryDays: number | null;
+  };
+  features: Record<string, boolean | string>;
+}
+
+export const isUnlimited = (n: number | null | undefined): boolean => n == null || !Number.isFinite(n);
+
+export async function getSubscription(teamId: string): Promise<Subscription> {
+  return (await req('GET', `/v1/teams/${teamId}/billing/subscription`)) as Subscription;
+}
+
+export async function getEntitlements(teamId: string): Promise<Entitlements> {
+  return (await req('GET', `/v1/teams/${teamId}/billing/entitlements`)) as Entitlements;
+}
+
+// Owner-only. Returns a hosted checkout URL to open in the browser — the app never handles
+// card details.
+export async function startCheckout(teamId: string, plan: 'PRO' | 'ENTERPRISE'): Promise<string> {
+  const r = await req('POST', `/v1/teams/${teamId}/billing/checkout`, { plan, interval: 'monthly' });
+  return r.checkoutUrl as string;
+}
+
+// Admin+. Deep-link into the payment provider's customer portal (invoices, card, cancel).
+export async function billingPortal(teamId: string): Promise<string> {
+  const r = await req('POST', `/v1/teams/${teamId}/billing/portal`);
+  return r.portalUrl as string;
+}

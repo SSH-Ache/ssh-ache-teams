@@ -120,23 +120,43 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 // hide our custom min/max/close glyphs and leave room for them on the left.
 const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent || (navigator as any).platform || "");
 
+// This is SSH Ache **Teams** — the commercial build. It is a separate product from the
+// Apache-2.0 community edition (SSH-Ache/ssh-ache): different app name, different bundle
+// identifier, and no "support the author" / tip links. Teams is paid software with a free
+// plan; asking the same users for donations on top of a subscription is the wrong ask.
+const PRODUCT = {
+  name: "SSH Ache Teams",
+  account: "https://sshache.com/app",
+  docs: "https://sshache.com/docs/teams/",
+  community: "https://github.com/SSH-Ache/ssh-ache",
+};
+
+// Teams chrome palette — deliberately violet, where the community edition is orange. Applied
+// only to Teams surfaces (badge, plan pill, Teams panel) so user themes still own the terminal.
+const TEAMS_HUE = {
+  accent: "#8b7bff",
+  accentHi: "#b79bff",
+  grad: "linear-gradient(135deg,#7c6cff,#b455f7)",
+  soft: "rgba(139,123,255,.12)",
+  line: "rgba(139,123,255,.34)",
+};
+
 const AUTHOR = {
   name: "Noor Ajmir Tanvir",
   github: "https://github.com/TanvirMahin24",
   email: "tanvirmahin24@gmail.com",
   site: "https://tanvirmahin.com",
-  tip: "https://www.patreon.com/cw/tanvirmahin24",
   motto: "Don't be so busy making a living that you forget to actually make a life.",
 };
 
 // First-run guided tour (centered stepper, skippable). Persisted via `tourSeen`.
 const TOUR_STEPS = [
-  { icon: "❯_", title: "Welcome to SSH Ache", body: "A fast desktop SSH client — terminal, files, and tunnels in one place. Take the 30-second tour?" },
+  { icon: "❯_", title: "Welcome to SSH Ache Teams", body: "A fast desktop SSH client — terminal, files, and tunnels — plus end-to-end-encrypted sharing with your team. Take the 30-second tour?" },
   { icon: "+", title: "Save your connections", body: "Add hosts with “New host” (⌘N). Passwords and keys live in your OS keychain, never in plaintext." },
   { icon: "›_", title: "Terminal & splits", body: "Open real SSH or local-shell tabs. Split a pane with ⌘D, and run anything from the ⌘K command palette." },
   { icon: "⇅", title: "Move files over SFTP", body: "Press ⌘J for the SFTP panel, then drag files or whole folders between local and remote." },
+  { icon: "◈", title: "Share with your team", body: "Open the Teams tab to create a team, invite people, and share connections — encrypted on your device, so the server only ever holds ciphertext." },
   { icon: "◐", title: "Theme everything", body: "Hit ⌘T to switch theme — it repaints the entire app and the terminal together, not just the colours." },
-  { icon: "♥", title: "Built by Noor Ajmir Tanvir", body: "That’s it! Add your first connection to begin. You can support the project any time from the ♥ menu." },
 ];
 // Open a link in the OS browser. Tauri webview won't honour target=_blank, so
 // route through the open_url command there; plain window.open in the browser.
@@ -223,6 +243,13 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.8.0', items: [
+    'SSH Ache Teams is now its own app. It installs as “SSH Ache Teams” with its own icon and identifier, so it no longer collides with the community edition — you can keep both. Your connections, settings and saved secrets are untouched.',
+    'Teams tab rebuilt as “Teams & billing”: your current team, its plan, seats used vs. your plan limits, renewal date, and a side-by-side Free/Pro/Enterprise comparison.',
+    'Upgrade and manage billing without leaving the app — checkout and invoices open in your browser (the app never handles card details).',
+    'The title bar now always shows which team you’re in and what plan it’s on.',
+    'Change a member’s role in place (member/admin, and auditor on Enterprise), and see a warning before you hit a plan limit instead of after.',
+  ] },
   { version: '0.7.5', items: [
     'Command autosuggest: as you type in the terminal, the most recent matching command from your history appears as dim ghost text — press Tab, → or End to accept. Fish-shell style, and 100% local: your history never leaves your machine.',
   ] },
@@ -862,6 +889,7 @@ export default class App extends React.Component<any, any> {
     updateChecking: false,
     view: 'dashboard',
     teamPresence: {}, // connId -> [{ userId, displayName, email, kind, sessionId }] of teammates active on it (not you)
+    activeTeamId: '', // team currently selected in the Teams tab — drives the title-bar team/plan pill
     presenceModal: null, // { host, presence } — the "who's online" modal for a team connection card
     broadcast: false,
     search: '',
@@ -1455,6 +1483,23 @@ export default class App extends React.Component<any, any> {
     }
   }
   handlePaneClosed(tab, paneId) { this.setPaneConnected(tab.id, paneId, false); }
+
+  // Title-bar team/plan pill. Reads the teams client module directly (it owns the session); the
+  // `activeTeamId` state is only the selection, pushed up by TeamsPanel.
+  teamBadge() {
+    if (!teams.isSignedIn()) return { signedIn: false, label: 'Sign in to Teams', plan: '', paid: false, title: 'Connect this app to your SSH Ache Teams account' };
+    const ms = teams.currentMemberships();
+    const m = ms.find((x) => x.teamId === this.state.activeTeamId) || ms.find((x) => !x.isPersonal) || ms[0];
+    if (!m) return { signedIn: true, label: 'No team yet', plan: '', paid: false, title: 'Create a team in the Teams tab' };
+    const plan = String(m.planTier || 'FREE').toUpperCase();
+    return {
+      signedIn: true,
+      label: m.isPersonal ? 'Personal vault' : (m.teamName || 'Team'),
+      plan: m.isPersonal ? '' : plan,
+      paid: plan === 'PRO' || plan === 'ENTERPRISE',
+      title: (m.teamName || 'Team') + ' · ' + plan.toLowerCase() + ' plan · you are ' + String(m.role || '').toLowerCase(),
+    };
+  }
 
   // ---- Team presence: report which team connection each live SSH pane is on, poll who's active ----
   presenceHeartbeatTick() {
@@ -2599,6 +2644,7 @@ export default class App extends React.Component<any, any> {
       teamNudge: !s.settings.teamNudgeDismissed,
       dismissTeamNudge: () => this.setState(st => ({ settings: { ...st.settings, teamNudgeDismissed: true } })),
       teamsDefaults: { email: s.settings.teamsEmail || '' },
+      teamBadge: this.teamBadge(),
 
       // dashboard
       allFolder, folders, allTags, groups,
@@ -2762,11 +2808,21 @@ export default class App extends React.Component<any, any> {
         {/* TITLE BAR */}
         <div data-tauri-drag-region style={css("height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;" + (isMac ? "padding-left:80px;" : "") + "background:#0a0a0d;border-bottom:1px solid #16161c;")}>
           <div style={css("display:flex;align-items:center;gap:9px;")}>
-            <img src={logoMark} width="20" height="20" alt="SSH Ache" style={{ borderRadius: "6px", boxShadow: "0 0 12px rgba(255,77,112,.45)" }} />
+            <img src={logoMark} width="20" height="20" alt={PRODUCT.name} style={{ borderRadius: "6px", boxShadow: "0 0 12px rgba(124,108,255,.45)" }} />
             <span style={css("font-weight:700;font-size:13px;letter-spacing:.01em;color:#f2f2f5;")}>SSH&nbsp;Ache</span>
+            <span style={{ ...css("font-size:9.5px;font-weight:800;letter-spacing:.13em;color:#fff;border-radius:4px;padding:2.5px 6px;text-transform:uppercase;"), background: TEAMS_HUE.grad, boxShadow: "0 2px 10px rgba(124,108,255,.4)" }}>Teams</span>
             <span style={css("font-size:10px;color:#6a6a74;border:1px solid #26262e;border-radius:4px;padding:1px 5px;")}>v{v.appVersion}</span>
             {v.updateInfo && (<Hov onClick={v.doDownloadUpdate} title={"Download v" + v.updateInfo.version} s="font-size:10px;color:#0c0b0a;background:#ff7a59;border-radius:4px;padding:2px 7px;cursor:pointer;font-weight:600;" h="background:#ff8d70;">↑ Update</Hov>)}
           </div>
+          {/* Current team + plan — always visible, so "which team am I in and what am I paying
+              for" is answerable without opening a panel. Click jumps to the Teams tab. */}
+          <Hov onClick={v.goTeams} title={v.teamBadge.title} s={"display:flex;align-items:center;gap:7px;margin-left:4px;padding:4px 9px 4px 7px;border-radius:999px;cursor:pointer;border:1px solid " + (v.teamBadge.signedIn ? TEAMS_HUE.line : "#20202a") + ";background:" + (v.teamBadge.signedIn ? TEAMS_HUE.soft : "#101015") + ";"} h="filter:brightness(1.22);">
+            <span style={css("font-size:11px;color:" + (v.teamBadge.signedIn ? TEAMS_HUE.accentHi : "#6a6a74") + ";")}>◈</span>
+            <span style={css("font-size:11.5px;font-weight:600;color:" + (v.teamBadge.signedIn ? "#ededf0" : "#8b8b95") + ";max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{v.teamBadge.label}</span>
+            {v.teamBadge.plan && (
+              <span style={{ ...css("font-size:9px;font-weight:800;letter-spacing:.08em;border-radius:999px;padding:1.5px 6px;"), ...(v.teamBadge.paid ? { background: TEAMS_HUE.grad, color: "#fff" } : { background: "#1a1a22", color: "#9a9aa3", border: "1px solid #26262e" }) }}>{v.teamBadge.plan}</span>
+            )}
+          </Hov>
           <span data-tauri-drag-region style={css("flex:1;")}></span>
           <div style={css("display:flex;align-items:center;gap:7px;")}>
             <Hov onClick={v.openPalette} s="display:flex;align-items:center;gap:7px;padding:5px 9px;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;color:#9a9aa3;font-size:11px;" h="background:#15151b;color:#ededf0;">
@@ -2778,7 +2834,7 @@ export default class App extends React.Component<any, any> {
               <span style={css("width:9px;height:9px;border-radius:50%;background:#46d9a0;margin-left:-4px;")}></span>
             </Hov>
             <Hov onClick={v.toggleSftp} title="SFTP" s="padding:6px 10px;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;color:#b9b9c2;font-size:11px;" h="background:#15151b;color:#ededf0;">⇅&nbsp;SFTP</Hov>
-            <Hov onClick={v.openAbout} title="About · support the author" s="width:32px;height:28px;display:flex;align-items:center;justify-content:center;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;" h="background:#15151b;border-color:rgba(255,95,109,.4);">
+            <Hov onClick={v.openAbout} title="About SSH Ache Teams" s="width:32px;height:28px;display:flex;align-items:center;justify-content:center;background:#101015;border:1px solid #20202a;border-radius:6px;cursor:pointer;" h="background:#15151b;border-color:rgba(139,123,255,.45);">
               <svg width="15" height="15" viewBox="0 0 24 24" className="aca-heart" aria-hidden="true">
                 <defs><linearGradient id="acaHeartGrad" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse"><stop stopColor="#ff8a63"/><stop offset="1" stopColor="#ff3d7f"/></linearGradient></defs>
                 <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="url(#acaHeartGrad)"/>
@@ -2820,8 +2876,11 @@ export default class App extends React.Component<any, any> {
                   <span style={css("font-size:9.5px;color:#54545e;border:1px solid #20202a;border-radius:9px;padding:1px 6px;")}>{v.sessionCount}</span>
                 </div>
                 <div onClick={v.goTeams} style={v.navTeamsStyle}>
-                  <span style={css("font-size:12px;flex:none;width:16px;text-align:center;color:#6ea8ff;")}>◈</span>
-                  <span style={css("flex:1;")}>Teams</span>
+                  <span style={css("font-size:12px;flex:none;width:16px;text-align:center;color:" + TEAMS_HUE.accent + ";")}>◈</span>
+                  <span style={css("flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>Teams &amp; billing</span>
+                  {v.teamBadge.plan
+                    ? <span style={{ ...css("font-size:8.5px;font-weight:800;letter-spacing:.07em;border-radius:999px;padding:1.5px 5px;flex:none;"), ...(v.teamBadge.paid ? { background: TEAMS_HUE.grad, color: '#fff' } : { background: '#1a1a22', color: '#8b8b95', border: '1px solid #26262e' }) }}>{v.teamBadge.plan}</span>
+                    : !v.teamBadge.signedIn && <span style={css("font-size:9px;color:" + TEAMS_HUE.accent + ";flex:none;")}>●</span>}
                 </div>
               </div>
               <div style={css("flex:1;overflow:auto;padding:6px 10px 8px;")}>
@@ -2860,6 +2919,8 @@ export default class App extends React.Component<any, any> {
                   onImport={(args) => this.importTeamHost(args)}
                   onSync={(force) => this.syncAllTeams(force)}
                   onGoDashboard={() => this.setView('dashboard')}
+                  onTeamContext={(teamId) => this.setState({ activeTeamId: teamId || '' })}
+                  openExt={openExt}
                 />
               </div>
             )}
@@ -2867,9 +2928,12 @@ export default class App extends React.Component<any, any> {
             {/* DASHBOARD */}
             {v.isDashboard && (v.noHosts ? (
               <div style={css("flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:auto;padding:48px 24px;text-align:center;")}>
-                <img src={logoMark} width="84" height="84" alt="SSH Ache" className="aca-float" style={{ borderRadius: '24px', boxShadow: '0 0 42px rgba(var(--accent-rgb),.35)' }} />
-                <div style={{ ...css("font-size:30px;font-weight:700;margin-top:22px;letter-spacing:-.02em;"), background: 'linear-gradient(120deg,var(--accent-hi),var(--accent))', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Welcome to SSH&nbsp;Ache</div>
-                <div style={css("font-size:13px;color:#9a9aa3;margin-top:11px;max-width:460px;line-height:1.65;")}>No connections yet. Add your first server to get started — a fast, secure terminal with SFTP and port forwarding, all on your machine.</div>
+                <img src={logoMark} width="84" height="84" alt={PRODUCT.name} className="aca-float" style={{ borderRadius: '24px', boxShadow: '0 0 42px rgba(var(--accent-rgb),.35)' }} />
+                <div style={css("display:flex;align-items:center;gap:11px;margin-top:22px;")}>
+                  <div style={{ ...css("font-size:30px;font-weight:700;letter-spacing:-.02em;"), background: 'linear-gradient(120deg,var(--accent-hi),var(--accent))', WebkitBackgroundClip: 'text', backgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Welcome to SSH&nbsp;Ache</div>
+                  <span style={{ ...css("font-size:11px;font-weight:800;letter-spacing:.14em;color:#fff;border-radius:6px;padding:4px 9px;text-transform:uppercase;"), background: TEAMS_HUE.grad, boxShadow: '0 4px 18px rgba(124,108,255,.4)' }}>Teams</span>
+                </div>
+                <div style={css("font-size:13px;color:#9a9aa3;margin-top:11px;max-width:470px;line-height:1.65;")}>No connections yet. Add your first server to get started — a fast, secure terminal with SFTP and port forwarding, all on your machine. When you're ready, share them with your team, end-to-end encrypted.</div>
                 <div style={css("margin-top:26px;display:flex;align-items:center;gap:11px;")}>
                   <Hov as="button" onClick={v.openAddHost} s="display:flex;align-items:center;gap:9px;padding:13px 24px;background:#ff7a59;border:none;border-radius:10px;color:#0c0b0a;font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 28px rgba(255,122,89,.28);" h="background:#ff8d70;">
                     <span style={css("font-size:16px;")}>+</span><span>Add your first connection</span>
@@ -2887,9 +2951,9 @@ export default class App extends React.Component<any, any> {
                   <span>Crafted by</span>
                   <span onClick={() => v.openExt(v.author.site)} style={css("color:#9a9aa3;cursor:pointer;")}>{v.author.name}</span>
                   <span style={css("color:#26262e;")}>·</span>
-                  <span onClick={() => v.openExt(v.author.github)} style={css("color:#9a9aa3;cursor:pointer;")}>GitHub</span>
+                  <span onClick={() => v.openExt(PRODUCT.docs)} style={css("color:#9a9aa3;cursor:pointer;")}>Teams docs</span>
                   <span style={css("color:#26262e;")}>·</span>
-                  <span onClick={() => v.openExt(v.author.tip)} style={css("color:#ff7a59;cursor:pointer;")}>Buy me a coffee ☕</span>
+                  <span onClick={() => v.openExt(PRODUCT.account)} style={css("cursor:pointer;color:" + TEAMS_HUE.accentHi + ";")}>Account &amp; billing</span>
                 </div>
               </div>
             ) : (
@@ -3242,9 +3306,12 @@ export default class App extends React.Component<any, any> {
                 <Hov onClick={v.closeAbout} s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#8b8b95;border:1px solid #26262e;border-radius:6px;cursor:pointer;" h="background:#16161c;color:#ededf0;">×</Hov>
               </div>
               <div style={css("padding:26px 22px 24px;display:flex;flex-direction:column;align-items:center;text-align:center;")}>
-                <img src={logoMark} width="80" height="80" alt="SSH Ache" style={{ borderRadius: "22px", boxShadow: "0 0 32px rgba(255,77,112,.42)" }} />
-                <div style={css("font-size:17px;font-weight:700;color:#f2f2f5;margin-top:15px;")}>{v.author.name}</div>
-                <div style={css("font-size:11.5px;color:#6a6a74;margin-top:3px;")}>Author &amp; developer of SSH&nbsp;Ache</div>
+                <img src={logoMark} width="80" height="80" alt={PRODUCT.name} style={{ borderRadius: "22px", boxShadow: "0 0 32px rgba(124,108,255,.42)" }} />
+                <div style={css("display:flex;align-items:center;gap:8px;margin-top:15px;")}>
+                  <span style={css("font-size:17px;font-weight:700;color:#f2f2f5;")}>SSH&nbsp;Ache</span>
+                  <span style={{ ...css("font-size:9.5px;font-weight:800;letter-spacing:.13em;color:#fff;border-radius:4px;padding:3px 7px;text-transform:uppercase;"), background: TEAMS_HUE.grad }}>Teams</span>
+                </div>
+                <div style={css("font-size:11.5px;color:#6a6a74;margin-top:6px;line-height:1.6;max-width:300px;")}>The commercial edition — everything in the app, plus end-to-end-encrypted team sharing. Built by {v.author.name}.</div>
                 <div style={css("position:relative;margin-top:18px;padding:15px 18px 14px;background:#0e0e12;border:1px solid #1c1c24;border-radius:12px;")}>
                   <span style={css("position:absolute;top:-12px;left:12px;font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:1;color:#ff5f6d;opacity:.55;")}>&ldquo;</span>
                   <div style={{ ...css("font-size:13px;font-style:italic;line-height:1.62;font-weight:600;"), background: "linear-gradient(120deg,#ff8a63,#ff5f6d,#ff3d7f)", WebkitBackgroundClip: "text", backgroundClip: "text", WebkitTextFillColor: "transparent" }}>{v.author.motto}</div>
@@ -3254,9 +3321,13 @@ export default class App extends React.Component<any, any> {
                   <Hov as="button" onClick={() => v.openExt('mailto:' + v.author.email)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Email</Hov>
                   <Hov as="button" onClick={() => v.openExt(v.author.site)} s="flex:1;padding:9px 8px;background:#101015;border:1px solid #20202a;border-radius:7px;color:#b9b9c2;font:inherit;font-size:11px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Website</Hov>
                 </div>
-                <Hov as="button" onClick={() => v.openExt(v.author.tip)} s="margin-top:11px;width:100%;padding:11px;background:linear-gradient(135deg,#ff7a59,#ff4f7a);border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;" h="filter:brightness(1.06);">☕&nbsp;Buy me a coffee</Hov>
-                <Hov as="button" onClick={v.openWhatsNew} s="margin-top:12px;background:none;border:none;color:#7a7a85;font:inherit;font-size:11px;text-decoration:underline;cursor:pointer;" h="color:#ededf0;">What's new in SSH&nbsp;Ache</Hov>
-                <div style={css("font-size:10px;color:#54545e;margin-top:10px;")}>SSH&nbsp;Ache · v{v.appVersion}</div>
+                <Hov as="button" onClick={() => v.openExt(PRODUCT.account)} s={"margin-top:11px;width:100%;padding:11px;border:none;border-radius:8px;color:#fff;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;background:" + TEAMS_HUE.grad + ";"} h="filter:brightness(1.08);">◈&nbsp;Account &amp; billing</Hov>
+                <Hov as="button" onClick={v.openWhatsNew} s="margin-top:12px;background:none;border:none;color:#7a7a85;font:inherit;font-size:11px;text-decoration:underline;cursor:pointer;" h="color:#ededf0;">What's new in SSH&nbsp;Ache&nbsp;Teams</Hov>
+                <div style={css("font-size:10px;color:#54545e;margin-top:10px;")}>{PRODUCT.name} · v{v.appVersion}</div>
+                <div style={css("font-size:10px;color:#46464f;margin-top:5px;line-height:1.6;")}>
+                  Source-available under PolyForm Noncommercial.{' '}
+                  <span onClick={() => v.openExt(PRODUCT.community)} style={css("color:#7a7a85;cursor:pointer;text-decoration:underline;")}>Community edition</span> is Apache-2.0, for individual use.
+                </div>
               </div>
             </div>
           </div>
@@ -3660,7 +3731,7 @@ export default class App extends React.Component<any, any> {
 
               </div>
               <div style={css("flex:none;display:flex;align-items:center;padding:14px 22px;border-top:1px solid #18181f;")}>
-                <span style={css("font-size:10.5px;color:#54545e;")}>SSH Ache · v{v.appVersion}</span>
+                <span style={css("font-size:10.5px;color:#54545e;")}>{PRODUCT.name} · v{v.appVersion}</span>
                 <span style={css("flex:1;")}></span>
                 <Hov as="button" onClick={v.closeSettings} s="padding:9px 18px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Done</Hov>
               </div>
@@ -3864,7 +3935,7 @@ export default class App extends React.Component<any, any> {
         {v.locked && (
           <div style={css("position:absolute;inset:0;background:#09090b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:95;animation:acaFade .15s ease;")}>
             <span style={css("width:34px;height:34px;background:#ff7a59;border-radius:8px;transform:rotate(45deg);box-shadow:0 0 24px rgba(255,122,89,.5);")}></span>
-            <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:6px;")}>SSH Ache is locked</div>
+            <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:6px;")}>{PRODUCT.name} is locked</div>
             <div style={css("font-size:11.5px;color:#6a6a74;")}>Enter your vault passphrase to unlock.</div>
             <div style={css("display:flex;gap:8px;margin-top:4px;")}>
               <input value={v.unlockValue} onChange={v.onUnlockInput} onKeyDown={v.onUnlockKey} type="password" autoFocus spellCheck={false} placeholder="Passphrase" style={css("width:240px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />

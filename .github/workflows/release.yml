@@ -61,8 +61,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "SSH Ache ${{ github.ref_name }}"
-          releaseBody: "Download the installer for your platform below. macOS users can also `brew install --cask SSH-Ache/sshache/sshache`."
+          releaseName: "SSH Ache Teams ${{ github.ref_name }}"
+          releaseBody: "SSH Ache **Teams** — the commercial edition (E2EE team sharing, plans & billing). Download the installer for your platform below. macOS users can also `brew install --cask SSH-Ache/sshache/sshache-teams`. Looking for the individual, Apache-2.0 build? That's [SSH-Ache/ssh-ache](https://github.com/SSH-Ache/ssh-ache)."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
