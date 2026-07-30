@@ -100,7 +100,7 @@ const PLANS = [
     price: '$2',
     unit: '/member/mo · first 2 free',
     tag: 'Most teams',
-    perks: ['Unlimited members & connections', 'Shared folders & tags', 'Access grants, JIT & approvals', 'Secret rotation reminders', '90-day audit + 30-day history'],
+    perks: ['Unlimited members & connections', 'Shared folders & tags', 'Access grants, JIT & approvals (API today, UI next)', 'Connection history & rollback', '90-day audit + 30-day history'],
   },
   {
     id: 'ENTERPRISE',
@@ -108,7 +108,7 @@ const PLANS = [
     price: '$3',
     unit: '/member/mo · from seat 1, 10 min',
     tag: 'Compliance',
-    perks: ['Everything in Pro', 'SAML + OIDC SSO & SCIM', 'Auditor role & custom RBAC', 'Admin key escrow & IP allowlists', 'Unlimited audit + SIEM export'],
+    perks: ['Everything in Pro', 'SAML + OIDC SSO & SCIM (API today, UI next)', 'Read-only Auditor role', 'Admin key escrow & break-glass (API today, UI next)', 'Unlimited audit + SIEM export'],
   },
 ] as const;
 
