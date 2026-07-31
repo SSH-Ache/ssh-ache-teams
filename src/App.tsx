@@ -1016,7 +1016,9 @@ export default class App extends React.Component<any, any> {
     themeId: 'ember',
     tourSeen: false,
     tourStep: 0,
-    appVersion: '0.0.0',
+    // Baked in by vite (define). Tauri's getVersion() still overrides it on mount — this is what
+    // shows before that resolves, and the only source when the frontend runs in a browser.
+    appVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0',
     update: null,        // null | { version, url, asset }
     updateChecking: false,
     view: 'dashboard',
