@@ -18,9 +18,7 @@
 
 > "Don't be so busy making a living that you forget to actually make a life."
 
-<!-- Add a product screenshot at docs/screenshot.png, then uncomment:
-<p align="center"><img src="docs/screenshot.png" width="820" alt="SSH Ache screenshot"></p>
--->
+<p align="center"><img src="docs/screenshot.png" width="820" alt="The SSH Ache Teams dashboard: personal connections in folders alongside a shared team folder, with a saved four-pane team workspace"></p>
 
 ## Features
 
