@@ -357,6 +357,10 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.9.1', items: [
+    'Plan comparison now matches what the product actually does. Access grants, SSO, SCIM and admin key escrow are marked “API today, UI next” rather than looking like screens you already have, and two entries that were never implemented — secret rotation reminders and IP allowlists — are gone.',
+    'The Auditor role is real and now assignable: invite someone as a read-only Auditor from the members panel on Enterprise.',
+  ] },
   { version: '0.9.0', items: [
     'Workspaces — arrange a tab into columns, rows, a main+stack split or a 2×2 grid, give each pane a different connection, then save the whole thing. It reopens from the dashboard as one click.',
     'Team workspaces: build one on shared connections and you can share it with the team — every connection in it is uploaded end-to-end encrypted so teammates can open the same set. Keep it private instead and it stays on this device, under Others.',
