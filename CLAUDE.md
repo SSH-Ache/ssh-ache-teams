@@ -49,8 +49,18 @@ relicensed Apache-2.0. Change a **local** feature → it should be portable to c
 **teams** feature → it stays here only. Keep local vs teams cleanly separable.
 
 ## CI / release
-`ci.yml` (Vite build) + `release.yml` (tag → installers), plus `homebrew.yml` (needs a tap +
-`HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.8.0` are preserved. See the `cut-release` skill.
+`ci.yml` (Vite build + `npm test` + `cargo check` on macOS/Windows/Linux) + `release.yml` (tag →
+installers; macOS signing/notarization switches on by itself once the six `APPLE_*` secrets exist),
+plus `homebrew.yml` (needs a tap + `HOMEBREW_TAP_TOKEN`). Version tags `v0.1.0`–`v0.8.0` are
+preserved. See the `cut-release` skill.
+
+- **`npm test`** runs `test/*.test.mjs` (node:test) over `src/backup.js` — the export/backup crypto
+  and the import whitelist. Keep `src/backup.js` in sync with the community repo's copy.
+- **The CSP in `tauri.conf.json` is real now, not `null`.** `connect-src` lists every origin the app
+  may reach: `https://api.github.com`, `https://sshache.com`, `wss://sshache.com`,
+  `wss://relay.sshache.com`. The relay URL is **server-supplied** (`RELAY_PUBLIC_URL` in the API),
+  so moving the relay to a new host without adding it here breaks live view / the web terminal with
+  a silent CSP block. Change both together.
 
 ⚠️ **This repo must stay PUBLIC.** While it was private its release assets 404'd for
 unauthenticated clients, which silently broke three things: the Homebrew cask (the workflow hashed

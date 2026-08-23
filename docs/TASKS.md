@@ -214,7 +214,12 @@ All additive; the working paths above are untouched.
   best-effort OS-keychain mirror on Windows/Linux.
 - **Keepalive** — `ssh_config()` sets `keepalive_interval: 30s`, `keepalive_max: 3`
   on every connection, so NAT/firewall idle-timeouts stop killing live tunnels &
-  terminals. (True auto-reconnect-on-drop is still a TODO — keepalive only.)
+  terminals. A session that drops anyway (idle timeout, network loss, sshd
+  restart) is no longer silent: the pane stays put and a **Connection lost**
+  modal offers *Reconnect* (same host, fresh shell, same pane — tab, layout and
+  scrollback all survive) or *Close tab*. `TermPane` only reports a close while
+  it is still mounted, so an intentional teardown never raises the prompt, and
+  simultaneous drops queue rather than overwrite each other.
 - **Scrollback search (⌘F)** — `@xterm/addon-search` + an in-pane find bar
   (Enter / ⇧Enter / Esc). `attachCustomKeyEventHandler` swallows ⌘F so the shell
   never sees it.

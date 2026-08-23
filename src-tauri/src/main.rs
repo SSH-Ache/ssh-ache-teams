@@ -202,7 +202,7 @@ async fn do_auth(
                 // Expand a leading ~/ since load_secret_key won't.
                 let path = key_path
                     .strip_prefix("~/")
-                    .map(|rest| format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest))
+                    .map(|rest| home_dir().unwrap_or_default().join(rest).to_string_lossy().to_string())
                     .unwrap_or_else(|| key_path.to_string());
                 load_secret_key(&path, pass).map_err(|e| format!("load key {path}: {e}"))?
             };
@@ -283,7 +283,23 @@ async fn do_auth(
                         }
                         KeyboardInteractiveAuthResponse::Failure { .. } => break,
                         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                            let answers = vec![secret.to_string(); prompts.len()];
+                            // Only auto-answer the classic single hidden "Password:"
+                            // prompt (what `ssh` fills in too). Anything else — an MFA
+                            // code, extra questions, or a hostile server phrasing a
+                            // prompt to harvest the password — is reported verbatim
+                            // instead of being answered with the password.
+                            let answers = if prompts.is_empty() {
+                                Vec::new()
+                            } else if prompts.len() == 1 && !prompts[0].echo {
+                                vec![secret.to_string()]
+                            } else {
+                                let list: Vec<String> =
+                                    prompts.iter().map(|p| p.prompt.trim().to_string()).collect();
+                                return Err(format!(
+                                    "server asked for keyboard-interactive input this app can't answer yet: {}",
+                                    list.join(" | ")
+                                ));
+                            };
                             step = session
                                 .authenticate_keyboard_interactive_respond(answers)
                                 .await
@@ -470,9 +486,18 @@ fn ssh_disconnect(state: State<'_, SshState>, session_id: String) {
 
 // ---- local config store: ~/.ssh-ache/<name>.json (non-secret data only) ----
 
+// HOME on Unix, USERPROFILE on Windows (where HOME is normally unset — reading
+// only HOME made every storage path fail there).
+fn home_dir() -> Result<std::path::PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "no home directory (HOME / USERPROFILE unset)".to_string())
+}
+
 fn config_dir() -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let dir = std::path::Path::new(&home).join(".ssh-ache");
+    let dir = home_dir()?.join(".ssh-ache");
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     #[cfg(unix)]
     {
@@ -508,12 +533,27 @@ fn write_config(name: String, data: String) -> Result<(), String> {
 
 // ---- secrets -----------------------------------------------------------
 // Primary store is a 0600 file in the app data dir (~/.ssh-ache/secrets.json) —
-// same access posture as ~/.ssh/id_rsa, and reliable on unsigned builds where
-// macOS keychain access (bound to the app's code signature) is flaky. The OS
-// keychain is still mirrored best-effort and read as a fallback so existing
-// keychain secrets keep working.
+// NOT encrypted: same access posture as ~/.ssh/id_rsa, and reliable on unsigned
+// builds where macOS keychain access (bound to the app's code signature) is
+// flaky. The OS keychain is still mirrored best-effort and read as a fallback
+// so existing keychain secrets keep working. The README/site say exactly this —
+// keep all three in step if this ever becomes real encryption.
 fn secret_entry(id: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new("sshache", id).map_err(|e| e.to_string())
+}
+
+// Write a file only the owner can read. On Unix the 0600 mode is applied when
+// the file is created, so the secrets are never briefly world-readable.
+fn write_private(path: &std::path::Path, data: &str) -> Result<(), String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path).map_err(|e| format!("write secrets: {e}"))?;
+    f.write_all(data.as_bytes()).map_err(|e| format!("write secrets: {e}"))
 }
 
 fn secrets_load() -> std::collections::HashMap<String, String> {
@@ -527,42 +567,41 @@ fn secrets_load() -> std::collections::HashMap<String, String> {
 fn secrets_store(map: &std::collections::HashMap<String, String>) -> Result<(), String> {
     let path = config_path("secrets")?;
     let data = serde_json::to_string(map).map_err(|e| e.to_string())?;
-    std::fs::write(&path, data).map_err(|e| format!("write secrets: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    write_private(&path, &data)
+}
+
+// File store first, OS keychain as the fallback (older installs stored there,
+// and it is the only store that survives if the file write ever fails).
+fn secret_read(id: &str) -> String {
+    if let Some(v) = secrets_load().get(id) {
+        if !v.is_empty() {
+            return v.clone();
+        }
     }
-    Ok(())
+    secret_entry(id)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 fn secret_get(id: String) -> Result<String, String> {
-    let map = secrets_load();
-    if let Some(v) = map.get(&id) {
-        if !v.is_empty() {
-            return Ok(v.clone());
-        }
-    }
-    // fall back to the OS keychain (older installs that stored there)
-    if let Ok(entry) = secret_entry(&id) {
-        if let Ok(p) = entry.get_password() {
-            return Ok(p);
-        }
-    }
-    Ok(String::new())
+    Ok(secret_read(&id))
 }
 
 #[tauri::command]
 fn secret_set(id: String, value: String) -> Result<(), String> {
     let mut map = secrets_load();
     map.insert(id.clone(), value.clone());
-    secrets_store(&map)?;
-    // best-effort keychain mirror (ignored if it fails, e.g. unsigned build)
-    if let Ok(entry) = secret_entry(&id) {
-        let _ = entry.set_password(&value);
+    let stored = secrets_store(&map);
+    // Keychain mirror — best effort, but it is also the fallback when the file
+    // store failed, so only report an error when BOTH fail (a silent failure
+    // here is a vault that looks saved and is empty on relaunch).
+    let mirrored = secret_entry(&id).and_then(|e| e.set_password(&value).map_err(|e| e.to_string()));
+    match (stored, mirrored) {
+        (Err(a), Err(b)) => Err(format!("could not save secret: {a} (keychain: {b})")),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -715,21 +754,28 @@ async fn sftp_put(
     remote_path: String,
     on_progress: Channel<u32>,
 ) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let sftp = sftp_of(&state, &id)?;
-    let data = tokio::fs::read(&local_path)
+    // Streamed in 32K chunks (like the download path) — buffering the whole file
+    // OOM'd on multi-GB uploads.
+    let mut src = tokio::fs::File::open(&local_path)
         .await
         .map_err(|e| format!("read local: {e}"))?;
-    let total = data.len();
+    let total = src.metadata().await.map(|m| m.len() as usize).unwrap_or(0);
     let mut file = sftp
         .create(&remote_path)
         .await
         .map_err(|e| format!("create remote: {e}"))?;
+    let mut buf = vec![0u8; 32768];
     let mut written = 0usize;
     let mut last = 0u32;
-    for chunk in data.chunks(32768) {
-        file.write_all(chunk).await.map_err(|e| format!("write: {e}"))?;
-        written += chunk.len();
+    loop {
+        let n = src.read(&mut buf).await.map_err(|e| format!("read local: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).await.map_err(|e| format!("write: {e}"))?;
+        written += n;
         let pct = if total == 0 { 100 } else { (written * 100 / total) as u32 };
         if pct != last {
             last = pct;
@@ -855,7 +901,7 @@ async fn sftp_put_dir(
     remote_path: String,
     on_progress: Channel<u32>,
 ) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let sftp = sftp_of(&state, &id)?;
     let mut stack = vec![(local_path, remote_path)];
     let mut mkdirs: Vec<String> = Vec::new();
@@ -878,10 +924,17 @@ async fn sftp_put_dir(
     }
     let total = files.len().max(1);
     let mut last = 0u32;
+    let mut buf = vec![0u8; 32768];
     for (i, (lp, rp)) in files.iter().enumerate() {
-        let data = tokio::fs::read(lp).await.map_err(|e| format!("read {lp}: {e}"))?;
+        let mut src = tokio::fs::File::open(lp).await.map_err(|e| format!("read {lp}: {e}"))?;
         let mut f = sftp.create(rp).await.map_err(|e| format!("create {rp}: {e}"))?;
-        f.write_all(&data).await.map_err(|e| e.to_string())?;
+        loop {
+            let n = src.read(&mut buf).await.map_err(|e| format!("read {lp}: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            f.write_all(&buf[..n]).await.map_err(|e| e.to_string())?;
+        }
         f.flush().await.ok();
         f.shutdown().await.ok();
         let pct = ((i + 1) * 100 / total) as u32;
@@ -1023,7 +1076,9 @@ fn local_list(path: String) -> Result<Vec<FileEntry>, String> {
 
 #[tauri::command]
 fn local_home() -> String {
-    std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
+    home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "/".to_string())
 }
 
 // Read/write an arbitrary file path — used for encrypted import/export, with the
@@ -1044,8 +1099,7 @@ fn read_file(path: String) -> Result<String, String> {
 // parse. Read-only; never written.
 #[tauri::command]
 fn read_ssh_config() -> Result<String, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let path = std::path::Path::new(&home).join(".ssh").join("config");
+    let path = home_dir()?.join(".ssh").join("config");
     match std::fs::read_to_string(&path) {
         Ok(s) => Ok(s),
         Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -1071,10 +1125,11 @@ fn pty_spawn(
     let pair = pty
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let default_shell = if cfg!(windows) { "powershell.exe" } else { "/bin/bash" };
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| default_shell.to_string());
     let mut cmd = CommandBuilder::new(shell);
     cmd.env("TERM", "xterm-256color");
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = home_dir() {
         cmd.cwd(home);
     }
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -1339,6 +1394,7 @@ async fn remote_forward_start(
     remote_port: u16,
     local_host: String,
     local_port: u16,
+    bind_all: Option<bool>,
 ) -> Result<(), String> {
     if let Some(h) = state.0.lock().unwrap().remove(&id) {
         h.abort();
@@ -1353,8 +1409,12 @@ async fn remote_forward_start(
         .await
         .map_err(|e| format!("connect: {e}"))?;
     do_auth(&mut session, &user, &auth, &secret, &key_path, &key_text).await?;
+    // Loopback by default, like OpenSSH `-R`: binding 0.0.0.0 exposes the
+    // forwarded port to everything that can reach the server, so it takes an
+    // explicit opt-in from the UI.
+    let bind = if bind_all.unwrap_or(false) { "0.0.0.0" } else { "127.0.0.1" };
     session
-        .tcpip_forward("0.0.0.0", remote_port as u32)
+        .tcpip_forward(bind, remote_port as u32)
         .await
         .map_err(|e| format!("remote forward request (server may forbid GatewayPorts): {e}"))?;
 
@@ -1462,7 +1522,18 @@ fn mcp_tool_call(app: &tauri::AppHandle, name: &str, args: &serde_json::Value) -
                 .iter()
                 .find(|h| h["id"].as_str() == Some(host_id))
                 .ok_or("host not found or not exposed to the agent")?;
-            let host_name = host["name"].as_str().unwrap_or("").to_string();
+            if host.get("jumpHost").and_then(|x| x.as_str()).is_some_and(|s| !s.is_empty()) {
+                return Err("this host connects through a jump host, which the agent bridge does not support yet".into());
+            }
+            // Label the approval with the real target, not just the display name — a
+            // host called "staging" can point anywhere.
+            let host_name = format!(
+                "{} · {}@{}:{}",
+                host["name"].as_str().unwrap_or(""),
+                host["user"].as_str().unwrap_or("root"),
+                host["addr"].as_str().unwrap_or(""),
+                host["port"].as_str().unwrap_or("22"),
+            );
             // Per-host opt-in: auto-allow skips the approval prompt for this host. Only exposed
             // (agentAllowed) hosts reach here, and the run is still logged for transparency.
             let auto = host.get("agentAutoAllow").and_then(|x| x.as_bool()).unwrap_or(false);
@@ -1473,7 +1544,10 @@ fn mcp_tool_call(app: &tauri::AppHandle, name: &str, args: &serde_json::Value) -
             if !allowed {
                 return Err("denied by user".into());
             }
-            let blob = secret_entry(host_id)?.get_password().unwrap_or_default();
+            // Same store the rest of the app reads (file first, keychain fallback) —
+            // reading the keychain alone authenticated with an empty password on
+            // unsigned builds.
+            let blob = secret_read(host_id);
             tauri::async_runtime::block_on(mcp_ssh_exec(host, &blob, command))
         }
         _ => Err("unknown tool".into()),
@@ -1488,7 +1562,7 @@ fn mcp_dispatch(app: &tauri::AppHandle, body: &str) -> Option<String> {
         "initialize" => serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": "sshache", "version": "0.4.0" }
+            "serverInfo": { "name": "sshache", "version": env!("CARGO_PKG_VERSION") }
         }),
         "ping" => serde_json::json!({}),
         "tools/list" => serde_json::json!({ "tools": mcp_tools() }),

@@ -572,8 +572,8 @@ export default function TeamsPanel({ isTauri, defaults, onRemember, onSync, onGo
 
         {!isTauri && (
           <p style={{ color: '#8b8b95', fontSize: 12.5, marginTop: 14 }}>
-            Note: imported credentials are stored in your OS keychain, which is only available in
-            the desktop app.
+            Note: imported credentials are stored in the desktop app's local secret store, which is
+            only available in the desktop app.
           </p>
         )}
 

@@ -1,6 +1,6 @@
 [package]
 name = "sshache-teams"
-version = "0.1.0"
+version = "0.10.0"
 description = "SSH client with end-to-end-encrypted team sharing"
 edition = "2021"
 

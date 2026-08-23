@@ -15,7 +15,7 @@
   </script>
 
   <title>SSH Ache — Desktop SSH Client with Terminal, SFTP &amp; Port Forwarding</title>
-  <meta name="description" content="SSH Ache is a desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), port forwarding and a SOCKS proxy. Secrets in your OS keychain, data encrypted at rest." />
+  <meta name="description" content="SSH Ache is a desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), port forwarding and a SOCKS proxy. Local-first: nothing is uploaded and no account is required." />
   <link rel="canonical" href="https://sshache.com/" />
   <meta name="robots" content="index, follow, max-image-preview:large" />
   <meta name="keywords" content="SSH client, desktop SSH client, SSH terminal, SFTP client, port forwarding, SOCKS proxy, ProxyJump, bastion host, ssh config import, ssh gui, ssh app, macOS SSH client, Windows SSH client, Linux SSH client" />
@@ -28,7 +28,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="SSH Ache" />
   <meta property="og:title" content="SSH Ache — Desktop SSH Client with Terminal, SFTP &amp; Port Forwarding" />
-  <meta property="og:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Secrets in your OS keychain, data encrypted at rest." />
+  <meta property="og:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Local-first: nothing is uploaded and no account is required." />
   <meta property="og:url" content="https://sshache.com/" />
   <meta property="og:locale" content="en_US" />
   <meta property="og:image" content="https://sshache.com/assets/og-image.png" />
@@ -39,7 +39,7 @@
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="SSH Ache — Desktop SSH Client" />
-  <meta name="twitter:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Encrypted at rest." />
+  <meta name="twitter:description" content="A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts, port forwarding and a SOCKS proxy. Nothing uploaded, no account." />
   <meta name="twitter:image" content="https://sshache.com/assets/og-image.png" />
 
   <!-- Fonts -->
@@ -982,9 +982,9 @@ kbd {
     "url": "https://sshache.com/",
     "downloadUrl": "https://github.com/SSH-Ache/ssh-ache-teams/releases",
     "softwareVersion": "0.2.2",
-    "description": "A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), ~/.ssh/config import, broadcast input, port forwarding, a SOCKS proxy, and an approval-gated AI agent bridge. Secrets live in the OS keychain and your data is encrypted at rest.",
+    "description": "A desktop SSH client with a clean terminal UI — SSH sessions, SFTP, jump hosts (ProxyJump), ~/.ssh/config import, broadcast input, port forwarding, a SOCKS proxy, and an approval-gated AI agent bridge. Everything runs locally: nothing is uploaded and no account is required.",
     "image": "https://sshache.com/assets/og-image.png",
-    "featureList": "Real terminal (russh + xterm.js), tabs and split panes, host vault, host-key verification, SFTP browser with create/rename/delete, jump hosts (ProxyJump), import ~/.ssh/config, broadcast input, local and remote port forwarding, dynamic SOCKS proxy, scrollback search, on-connect commands, output triggers, encrypted backup, idle vault lock, approval-gated MCP agent bridge",
+    "featureList": "Real terminal (russh + xterm.js), tabs and split panes, host vault, host-key verification, SFTP browser with create/rename/delete, jump hosts (ProxyJump), import ~/.ssh/config, broadcast input, local and remote port forwarding, dynamic SOCKS proxy, scrollback search, on-connect commands, output triggers, encrypted backup, idle screen lock, approval-gated MCP agent bridge",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "author": { "@type": "Person", "name": "Noor Ajmir Tanvir", "url": "https://tanvirmahin.com" }
   }
@@ -1024,7 +1024,7 @@ kbd {
         <p class="lead">
           A desktop SSH client with a clean terminal UI — connections, SFTP, jump
           hosts, port forwarding and a SOCKS proxy, and an approval-gated AI agent
-          bridge, with your data kept on your machine and encrypted at rest.
+          bridge, with your data kept on your machine and nothing uploaded anywhere.
         </p>
 
         <blockquote class="motto">
@@ -1066,7 +1066,7 @@ kbd {
           <article class="card">
             <div class="icon" aria-hidden="true">🗂️</div>
             <h3>Host vault</h3>
-            <p>Saved hosts in folders with colours and favourites. Secrets stay in the OS keychain, and you can copy a ready-to-run <code>ssh</code> command per host.</p>
+            <p>Saved hosts in folders with colours and favourites. Secrets stay out of the config file, and you can copy a ready-to-run <code>ssh</code> command per host.</p>
           </article>
 
           <article class="card">
@@ -1131,14 +1131,14 @@ kbd {
 
           <article class="card">
             <div class="icon" aria-hidden="true">⏳</div>
-            <h3>Idle vault lock</h3>
-            <p>An optional passphrase lock that engages after inactivity, so an unattended window doesn't leave your vault open.</p>
+            <h3>Idle screen lock</h3>
+            <p>An optional passphrase lock on the window that engages after inactivity, so an unattended machine doesn't leave your hosts on screen. Sessions and tunnels keep running behind it.</p>
           </article>
 
           <article class="card">
             <div class="icon" aria-hidden="true">🤖</div>
             <h3>AI agent access (MCP)</h3>
-            <p>An optional, off-by-default MCP server bound to localhost behind a bearer token — per-host opt-in, per-command approval, and secrets never reach the agent.</p>
+            <p>An optional, off-by-default MCP server bound to localhost behind a bearer token — per-host opt-in, per-command approval (with an off-by-default per-host Auto-allow), and secrets never reach the agent.</p>
           </article>
         </div>
       </div>
@@ -1171,8 +1171,8 @@ kbd {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
             </div>
             <div>
-              <h3>Secrets in the OS keychain</h3>
-              <p>Passwords and keys are handed to your operating system's keychain instead of sitting in plaintext config — the platform's vault holds them, not a loose file.</p>
+              <h3>Secrets kept out of your config</h3>
+              <p>Passwords and keys go to a <code>0600</code> file in your app data directory — owner-only, the same posture as <code>~/.ssh/id_rsa</code> — mirrored to the OS keychain where that works. They're never in the config file, never uploaded, and never encrypted at rest, so full-disk encryption is what protects them.</p>
             </div>
           </div>
 
@@ -1192,13 +1192,13 @@ kbd {
             </div>
             <div>
               <h3>Approval-gated agent bridge</h3>
-              <p>The AI-agent / MCP bridge is off by default and bound to localhost behind a bearer token. Every host is opt-in and every command needs in-app approval — and your secrets never reach the agent.</p>
+              <p>The AI-agent / MCP bridge is off by default and bound to localhost behind a bearer token. Every host is opt-in and every command needs in-app approval — unless you switch on Auto-allow for a specific host, which is off by default. Your secrets never reach the agent.</p>
             </div>
           </div>
         </div>
 
         <p class="sec-foot">
-          <strong>Your data stays on your machine, encrypted at rest.</strong>
+          <strong>Your data stays on your machine.</strong>
           Nothing about your hosts or sessions is sent anywhere you didn't choose.
         </p>
       </div>

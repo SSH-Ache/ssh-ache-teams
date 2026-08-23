@@ -27,6 +27,11 @@ jobs:
             args: ""
             rust-targets: ""
     runs-on: ${{ matrix.platform }}
+    # Held here rather than passed straight to the build: an EMPTY APPLE_CERTIFICATE
+    # makes the macOS bundler try to import a zero-byte certificate and fail, so the
+    # real names are only exported when the secrets actually exist.
+    env:
+      MAC_CERT: ${{ secrets.APPLE_CERTIFICATE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +59,21 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Inert until the six Apple secrets are set on the repo; then every macOS
+      # build is signed with a Developer ID and notarised + stapled by the bundler.
+      # Needs an Apple Developer Program membership ($99/yr).
+      - name: Enable macOS signing and notarization
+        if: matrix.platform == 'macos-latest' && env.MAC_CERT != ''
+        run: |
+          {
+            echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+          } >> "$GITHUB_ENV"
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0

@@ -3,7 +3,7 @@
 // Signs into the SaaS, unlocks the E2EE identity, then decrypts a team's shared SSH
 // connections locally. The server only ever sees ciphertext + wrapped keys.
 //
-// The unlocked session (identity secret + refresh token) is kept in the OS keychain so the
+// The unlocked session (identity secret + refresh token) is kept in the local secret store so the
 // app stays signed in across launches — see `saveSession` below. Sign out wipes it.
 //
 // Transport: plain fetch() from the Tauri webview (CORS-free) with a Bearer access token
@@ -99,10 +99,11 @@ export function signOut(): void {
 
 // ---- Stay signed in across launches --------------------------------------
 // Staying signed in means keeping the unlocked identity somewhere on the device. It goes into the
-// OS keychain — the same store this app already uses for SSH passwords and private keys — and
-// never into localStorage, the state file, or the server. What is stored is the 64-byte identity
-// secret (x25519Priv || ed25519Seed, exactly what device linking transfers) plus the rotating
-// refresh token. Sign out deletes the entry.
+// same local secret store this app uses for SSH passwords and private keys — a 0600 file in the app
+// data dir, mirrored to the OS keychain where that works, NOT encrypted at rest — and never into
+// localStorage, the state file, or the server. What is stored is the 64-byte identity secret
+// (x25519Priv || ed25519Seed, exactly what device linking transfers) plus the rotating refresh
+// token. Sign out deletes the entry, and so does "Clear all data".
 
 const SESSION_ID = 'teams.session';
 
@@ -140,7 +141,7 @@ async function saveSession(): Promise<void> {
   }
 }
 
-// Called once at launch. Rebuilds the vault from the keychain and trades the stored refresh token
+// Called once at launch. Rebuilds the vault from the secret store and trades the stored refresh token
 // for a fresh access token. Returns the memberships when restored, null when there is no usable
 // session (never signed in, signed out, or the server rejected the refresh token).
 export async function restoreSession(): Promise<Membership[] | null> {

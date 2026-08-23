@@ -985,8 +985,8 @@ kbd {
     "@type": "FAQPage",
     "mainEntity": [
       { "@type": "Question", "name": "Which platforms does SSH Ache run on?", "acceptedAnswer": { "@type": "Answer", "text": "macOS, Windows, and Linux. It's built with Tauri 2, so each platform gets a native build — .dmg, .msi, and .AppImage / .deb respectively." } },
-      { "@type": "Question", "name": "Where are my passwords and keys stored?", "acceptedAnswer": { "@type": "Answer", "text": "In your operating system's keychain, not in a plaintext config file. SSH Ache hands secrets to the platform's secure store and retrieves them when a connection needs them." } },
-      { "@type": "Question", "name": "Does my data leave my machine?", "acceptedAnswer": { "@type": "Answer", "text": "Your data stays on your machine, encrypted at rest. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals." } },
+      { "@type": "Question", "name": "Where are my passwords and keys stored?", "acceptedAnswer": { "@type": "Answer", "text": "In a 0600 file in your app data directory (owner read/write only, the same posture as ~/.ssh/id_rsa), mirrored to the OS keychain where that works. They are never written to the config file and never uploaded, but they are not encrypted at rest — full-disk encryption is what protects them." } },
+      { "@type": "Question", "name": "Does my data leave my machine?", "acceptedAnswer": { "@type": "Answer", "text": "Your data stays on your machine — nothing is uploaded and no account is required. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals." } },
       { "@type": "Question", "name": "Is the AI agent bridge safe to enable?", "acceptedAnswer": { "@type": "Answer", "text": "It's off by default. When enabled, it binds to localhost behind a bearer token, is opt-in per host, requires per-command approval in the app, and never receives your secrets." } },
       { "@type": "Question", "name": "What happens if a server's host key changes?", "acceptedAnswer": { "@type": "Answer", "text": "SSH Ache refuses to connect and warns you. Confirm the new fingerprint through a trusted channel before accepting it — a changed key can indicate a man-in-the-middle attempt." } },
       { "@type": "Question", "name": "How do I move my setup to a new computer?", "acceptedAnswer": { "@type": "Answer", "text": "Use the encrypted backup. Export your hosts and secrets to a password-encrypted file on the old machine, then import it with the same password on the new one." } }
@@ -1034,7 +1034,7 @@ kbd {
           <a href="#port-forwarding">Port forwarding</a>
           <a href="#themes">Themes &amp; settings</a>
           <a href="#backup">Encrypted backup</a>
-          <a href="#vault-lock">Idle vault lock</a>
+          <a href="#vault-lock">Idle screen lock</a>
           <a href="#mcp">AI agent access (MCP)</a>
           <a href="#shortcuts">Keyboard shortcuts</a>
           <a href="#faq">FAQ</a>
@@ -1055,12 +1055,12 @@ kbd {
           <p>
             SSH Ache is a desktop SSH client with a clean terminal UI — connections,
             SFTP, port forwarding, and an approval-gated AI agent bridge, with your
-            data kept on your machine and encrypted at rest.
+            data kept on your machine and nothing uploaded anywhere.
           </p>
           <p>
             Under the hood it is built with Tauri 2 (a Rust backend) and a React +
             xterm.js frontend. SSH sessions run on russh / russh-sftp, local shells on
-            portable-pty, and your secrets are stored in the operating system keychain.
+            portable-pty, and your secrets are stored outside the config file (see below).
             The result is a single, fast, native-feeling app for macOS, Windows, and Linux.
           </p>
           <div class="callout">
@@ -1100,7 +1100,7 @@ kbd {
           <p>
             Add a host with its address, port, and username, then connect to open a full
             SSH session in a terminal tab. Authentication is handled with a password or
-            key, and the secret is stored in your OS keychain rather than in plaintext.
+            key, and the secret is stored in a 0600 file outside the config, mirrored to the OS keychain.
           </p>
           <p>Saved hosts live in the <strong>host vault</strong>, where you can:</p>
           <ul>
@@ -1182,11 +1182,12 @@ kbd {
 
         <!-- Vault lock -->
         <section class="doc-section" id="vault-lock">
-          <h2><span class="num">09</span> Idle vault lock</h2>
+          <h2><span class="num">09</span> Idle screen lock</h2>
           <p>
-            Turn on the optional <strong>idle vault lock</strong> to have SSH Ache require
-            a passphrase after a period of inactivity. If you step away, an unattended
-            window won't leave your saved hosts and secrets open.
+            Turn on the optional <strong>idle screen lock</strong> to have SSH Ache require
+            a passphrase after a period of inactivity, so an unattended machine doesn't leave
+            your hosts on screen. It covers the window only: open sessions, port forwards and
+            the agent bridge keep running behind it, and nothing on disk is re-encrypted.
           </p>
         </section>
 
@@ -1207,7 +1208,7 @@ kbd {
           </ul>
           <div class="callout">
             <span class="c-ic" aria-hidden="true">🤖</span>
-            <p>Think of it as a gate, not a hand-off: the agent can ask, but every host and every command waits on your approval.</p>
+            <p>Think of it as a gate, not a hand-off: the agent can ask, but every host and every command waits on your approval — unless you switch on <strong>Auto-allow</strong> for a specific host, which is off by default and lets that one host run agent commands unattended.</p>
           </div>
         </section>
 
@@ -1242,12 +1243,12 @@ kbd {
 
           <details>
             <summary>Where are my passwords and keys stored?</summary>
-            <p>In your operating system's keychain, not in a plaintext config file. SSH Ache hands secrets to the platform's secure store and retrieves them when a connection needs them.</p>
+            <p>In <code>~/.ssh-ache/secrets.json</code>, a file created with mode <code>0600</code> — owner read/write only, the same access posture as <code>~/.ssh/id_rsa</code> — mirrored to the OS keychain where that works. They are never written to the config file and never uploaded. They are <strong>not encrypted at rest</strong>: anything running as your user can read them, so full-disk encryption (FileVault / BitLocker / LUKS) is what protects them.</p>
           </details>
 
           <details>
             <summary>Does my data leave my machine?</summary>
-            <p>Your data stays on your machine, encrypted at rest. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals.</p>
+            <p>Your data stays on your machine — nothing is uploaded and no account is required. Backups you export are password-encrypted files that only move if you move them, and the optional agent bridge is bound to localhost behind approvals.</p>
           </details>
 
           <details>

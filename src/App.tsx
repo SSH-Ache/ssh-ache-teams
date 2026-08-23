@@ -20,6 +20,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { History, attachAutosuggest, parseShellHistory } from "./autosuggest";
 import logoMark from "./assets/logo-mark.svg";
+import { b64, ub64, encryptJson, decryptJson, pickHostFields } from "./backup.js";
 
 type S = React.CSSProperties;
 
@@ -266,7 +267,7 @@ const AUTHOR = {
 // First-run guided tour (centered stepper, skippable). Persisted via `tourSeen`.
 const TOUR_STEPS = [
   { icon: "❯_", title: "Welcome to SSH Ache Teams", body: "A fast desktop SSH client — terminal, files, and tunnels — plus end-to-end-encrypted sharing with your team. Take the 30-second tour?" },
-  { icon: "+", title: "Save your connections", body: "Add hosts with “New host” (⌘N). Passwords and keys live in your OS keychain, never in plaintext." },
+  { icon: "+", title: "Save your connections", body: "Add hosts with “New host” (⌘N). Passwords and keys are kept out of the config, in an owner-only file (and your OS keychain where that works)." },
   { icon: "›_", title: "Terminal & splits", body: "Open real SSH or local-shell tabs. Split a pane with ⌘D, and run anything from the ⌘K command palette." },
   { icon: "⇅", title: "Move files over SFTP", body: "Press ⌘J for the SFTP panel, then drag files or whole folders between local and remote." },
   { icon: "◈", title: "Share with your team", body: "Open the Teams tab to create a team, invite people, and share connections — encrypted on your device, so the server only ever holds ciphertext." },
@@ -321,35 +322,22 @@ function parseSshConfig(text: string) {
   return out;
 }
 
-// Secrets live in the OS keychain (Tauri) — never in the config file or
-// localStorage. Each host id maps to a JSON blob { password?, passphrase?, keyText? }.
+// Secrets live in a 0600 file in the app data dir (~/.ssh-ache/secrets.json),
+// mirrored to the OS keychain where that works — see the comment above
+// `secret_entry` in src-tauri/src/main.rs. They are NOT encrypted at rest, and
+// never touch localStorage. Each host id maps to a JSON blob
+// { password?, passphrase?, keyText? }.
 const secretGet = async (id: string): Promise<any> => {
   if (!isTauri) return null;
   try { const s = await invoke<string>("secret_get", { id }); return s ? JSON.parse(s) : null; } catch (_) { return null; }
 };
-const secretSet = (id: string, obj: any) => { if (isTauri) invoke("secret_set", { id, value: JSON.stringify(obj) }).catch(() => {}); };
+// Set by the app on mount so a failed save is visible. Swallowing this error is
+// how a vault could look saved and come back empty on the next launch.
+let onSecretError: ((msg: string) => void) | null = null;
+const secretSet = (id: string, obj: any) => {
+  if (isTauri) invoke("secret_set", { id, value: JSON.stringify(obj) }).catch((e) => { if (onSecretError) onSecretError(String(e)); });
+};
 const secretDelete = (id: string) => { if (isTauri) invoke("secret_delete", { id }).catch(() => {}); };
-
-// ---- encrypted backup (Web Crypto: PBKDF2-SHA256 → AES-256-GCM) ----
-const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
-const ub64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-const deriveKey = async (password: string, salt: Uint8Array) => {
-  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-};
-const encryptJson = async (obj: any, password: string) => {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(password, salt);
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
-  return JSON.stringify({ app: "ssh-ache", v: 1, kdf: "PBKDF2-SHA256", iter: 200000, salt: b64(salt), iv: b64(iv), ct: b64(new Uint8Array(ct)) });
-};
-const decryptJson = async (envelope: string, password: string) => {
-  const e = JSON.parse(envelope);
-  const key = await deriveKey(password, ub64(e.salt));
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ub64(e.iv) }, key, ub64(e.ct));
-  return JSON.parse(new TextDecoder().decode(pt));
-};
 
 // MCP server (local agent access). Fixed loopback port + a random bearer token.
 const MCP_PORT = 8765;
@@ -634,7 +622,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
       const onDataL = new Channel<number[]>();
       onDataL.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); };
       const onCloseL = new Channel<string>();
-      onCloseL.onmessage = () => { term.writeln("\r\n\x1b[90m— shell exited —\x1b[0m"); if (onClosed) onClosed(); };
+      onCloseL.onmessage = () => { if (disposed) return; term.writeln("\r\n\x1b[90m— shell exited —\x1b[0m"); if (onClosed) onClosed(); };
       invoke("pty_spawn", { id: session.sessionId, cols: term.cols, rows: term.rows, onData: onDataL, onClose: onCloseL })
         .then(() => { if (!disposed && onConnected) onConnected(); })
         .catch((e) => { term.writeln(`\r\n\x1b[31mlocal shell failed: ${String(e)}\x1b[0m`); if (onError) onError(String(e)); });
@@ -668,7 +656,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
           else if (msg.type === "data" && typeof msg.data === "string") term.write(msg.data);
           else if (msg.type === "error") term.writeln(`\r\n\x1b[31m${msg.message || "relay error"}\x1b[0m`);
         };
-        sws.onclose = () => { term.writeln(`\r\n\x1b[90m— session ended —\x1b[0m`); if (onClosed) onClosed(); };
+        sws.onclose = () => { if (disposed) return; term.writeln(`\r\n\x1b[90m— session ended —\x1b[0m`); if (onClosed) onClosed(); };
         sws.onerror = () => { if (onError) onError("relay connection failed"); };
       } catch (e) {
         term.writeln(`\r\n\x1b[31mcould not connect: ${String(e)}\x1b[0m`); if (onError) onError(String(e));
@@ -707,7 +695,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
     const onData = new Channel<number[]>();
     onData.onmessage = (m) => { const u = new Uint8Array(m); term.write(u); scan(u); mirror.tee(u); };
     const onClose = new Channel<string>();
-    onClose.onmessage = () => { term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m"); if (onClosed) onClosed(); };
+    onClose.onmessage = () => { if (disposed) return; term.writeln("\r\n\x1b[90m— disconnected —\x1b[0m"); if (onClosed) onClosed(); };
 
     invoke("ssh_connect", {
       sessionId: session.sessionId,
@@ -817,7 +805,7 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
   );
 }
 
-// Key Vault: manage named, reusable private keys. Key text is stored in the OS keychain (never
+// Key Vault: manage named, reusable private keys. Key text goes to the secret store (never
 // in plaintext state, never uploaded); this modal only shows metadata + reveal-on-demand.
 function KeyVaultModal({ keys, onAdd, onDelete, onReveal, onClose }: any) {
   const [name, setName] = React.useState("");
@@ -837,7 +825,7 @@ function KeyVaultModal({ keys, onAdd, onDelete, onReveal, onClose }: any) {
           <button onClick={onClose} style={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", color: "#8b8b95", border: "1px solid #26262e", borderRadius: 6, cursor: "pointer", background: "transparent" }}>×</button>
         </div>
         <div style={{ padding: 16, overflow: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11, color: "#6a6a74" }}>Reusable private keys — stored encrypted in your OS keychain, never uploaded. Pick one when adding a connection.</div>
+          <div style={{ fontSize: 11, color: "#6a6a74" }}>Reusable private keys — stored in an owner-only (0600) file outside your config, never uploaded. Pick one when adding a connection.</div>
           {keys.length === 0 ? (
             <div style={{ padding: 18, textAlign: "center", color: "#6a6a74", fontSize: 12.5, border: "1px dashed #26262e", borderRadius: 10 }}>No saved keys yet — add one below.</div>
           ) : keys.map((k: any) => (
@@ -1046,6 +1034,8 @@ export default class App extends React.Component<any, any> {
     secretPrompt: null,
     hostKeyPrompt: null,
     confirmClose: null,
+    // Live SSH panes whose remote end went away, awaiting a reconnect-or-close answer.
+    dropped: [],
     clearConfirm: false,
     ioPrompt: null,
     locked: false,
@@ -1126,6 +1116,7 @@ export default class App extends React.Component<any, any> {
   }
 
   componentDidMount() {
+    onSecretError = (msg) => this.pushToast({ type: 'err', title: 'Secret not saved', msg: msg.length > 120 ? msg.slice(0, 120) + '…' : msg });
     this._key = (e) => {
       const meta = e.metaKey || e.ctrlKey;
       const k = (e.key || '').toLowerCase();
@@ -1168,7 +1159,7 @@ export default class App extends React.Component<any, any> {
       this.refreshMcp();
       import('@tauri-apps/api/event').then(({ listen }) => { listen('mcp-approval', (e) => this.setState({ approvalReq: e.payload })); }).catch(() => {});
     }
-    // Stay signed in across launches: rebuild the Teams session from the OS keychain, then sync.
+    // Stay signed in across launches: rebuild the Teams session from the local secret store, then sync.
     if (isTauri) this.restoreTeamsSession();
     // Team presence: report which team connection each live SSH pane is on, and poll who's active.
     this._hbTimer = setInterval(() => this.presenceHeartbeatTick(), 20000);
@@ -1229,7 +1220,7 @@ export default class App extends React.Component<any, any> {
       if (!rp || !lp || !f.remoteHost.trim()) { this.pushToast({ type: 'err', title: 'Invalid forward', msg: 'Need remote port, local host, and local port.' }); return; }
       const label = `remote :${rp} → ${f.remoteHost.trim()}:${lp}`, id = f.sessionId + ':rfwd:' + rp;
       this.setState({ fwdPrompt: null });
-      invoke('remote_forward_start', { id, ...base, remotePort: rp, localHost: f.remoteHost.trim(), localPort: lp })
+      invoke('remote_forward_start', { id, ...base, remotePort: rp, localHost: f.remoteHost.trim(), localPort: lp, bindAll: !!f.bindAll })
         .then(() => { this.setState(s => ({ forwards: [...s.forwards, { id, sessionId: f.sessionId, label }] })); this.pushToast({ type: 'ok', title: 'Remote forward started', msg: label }); })
         .catch((e) => this.pushToast({ type: 'err', title: 'Remote forward failed', msg: String(e) }));
       return;
@@ -1257,10 +1248,15 @@ export default class App extends React.Component<any, any> {
     this.pushToast({ type: 'info', title: 'Port forwards stopped', msg: n ? `${n} closed` : 'none active' });
   };
 
-  // Wipe every saved connection, setting, and keychain secret, then reload.
+  // Wipe every saved connection, setting, and stored secret, then reload.
   clearAllData = async () => {
     this.setState({ clearConfirm: false });
-    if (isTauri) { for (const h of this.state.hosts) { try { await invoke('secret_delete', { id: h.id }); } catch (_) {} } }
+    if (isTauri) {
+      // Host secrets, Key Vault entries (`key:<id>`) AND the Teams session blob
+      // (identity secret + refresh token) — the last two used to survive a full wipe.
+      const ids = [...this.state.hosts.map(h => h.id), ...this.state.vaultKeys.map(k => 'key:' + k.id), 'teams.session'];
+      for (const id of ids) { try { await invoke('secret_delete', { id }); } catch (_) {} }
+    }
     try { await saveCfg('state', JSON.stringify({ tourSeen: true })); } catch (_) {}
     this.pushToast({ type: 'ok', title: 'All data cleared', msg: 'Reloading…' });
     setTimeout(() => { try { (window as any).location.reload(); } catch (_) {} }, 400);
@@ -1420,10 +1416,12 @@ export default class App extends React.Component<any, any> {
   }
   _closeTabState(s, tabId) {
     const tabs = s.tabs.filter(t => t.id !== tabId);
-    if (tabs.length === 0) { const nt = this._localTab(); return { tabs:[nt], activeTabId:nt.id, activePaneId:nt.panes[0].id }; }
+    // Whatever closed this tab, its panes are gone — never prompt to reconnect them.
+    const dropped = (s.dropped || []).filter(d => d.tabId !== tabId);
+    if (tabs.length === 0) { const nt = this._localTab(); return { dropped, tabs:[nt], activeTabId:nt.id, activePaneId:nt.panes[0].id }; }
     let activeTabId = s.activeTabId, activePaneId = s.activePaneId;
     if (s.activeTabId === tabId) { const nt = tabs[tabs.length - 1]; activeTabId = nt.id; activePaneId = nt.panes[0].id; }
-    return { tabs, activeTabId, activePaneId };
+    return { dropped, tabs, activeTabId, activePaneId };
   }
 
   // A sibling pane for `src`. A live session gets its own sessionId, i.e. its own backend SSH
@@ -1749,7 +1747,7 @@ export default class App extends React.Component<any, any> {
       if (match) { idMap[h.id] = match.id; continue; }
       const nid = this.genId();
       idMap[h.id] = nid;
-      const host = { ...h, id: nid, teamId: undefined, connId: undefined, connVersion: undefined, online: true, lastUsed: 'never' };
+      const host = { ...pickHostFields(h), id: nid, online: true, lastUsed: 'never' };
       // eslint-disable-next-line no-await-in-loop
       await new Promise(res => this.setState(s => ({ hosts: [...s.hosts, host] }), res));
       if (inc.secret) secretSet(nid, inc.secret);
@@ -1937,7 +1935,42 @@ export default class App extends React.Component<any, any> {
       this.pushToast({ type: 'ok', title: 'Connected', msg: c.host.user + '@' + c.host.addr });
     }
   }
-  handlePaneClosed(tab, paneId) { this.setPaneConnected(tab.id, paneId, false); }
+  // The remote end of a live SSH pane went away — an idle timeout, a dropped network, or sshd
+  // closing the session. TermPane only calls this while it is still mounted, so an intentional
+  // teardown (closing the tab, reconnecting, merging tabs) never reaches here.
+  //
+  // The pane keeps its place: nothing is torn down until the human picks. Queued rather than
+  // stored singly, because a network drop takes every open session down at once and each one
+  // still deserves an answer.
+  handlePaneClosed(tab, paneId) {
+    this.setPaneConnected(tab.id, paneId, false);
+    this.setState(s => {
+      const t = s.tabs.find(x => x.id === tab.id);
+      const p = t && t.panes.find(x => x.id === paneId);
+      // Only a real SSH session can be reconnected: a local shell closing is the user typing
+      // `exit`, and a spectate pane ends when the teammate's session does.
+      if (!t || !p || !p.live || (p.kind || 'ssh') !== 'ssh' || !p.host) return null;
+      if (s.dropped.some(d => d.tabId === tab.id && d.paneId === paneId)) return null;
+      const h = p.host;
+      const label = (h.user || 'root') + '@' + h.addr + ':' + (h.port || 22);
+      return { dropped: [...s.dropped, { tabId: tab.id, paneId, label }] };
+    });
+  }
+  // Same host, fresh shell, same pane. reconnectPane swaps in a new sessionId, which remounts
+  // TermPane and reconnects.
+  reconnectDropped = () => {
+    const d = this.state.dropped[0];
+    if (!d) return;
+    this.setState(s => ({ dropped: s.dropped.slice(1) }));
+    this.reconnectPane(d.tabId, d.paneId);
+  };
+  // Force-close: the session is already gone, so the "Close session?" confirm would be noise.
+  closeDroppedTab = () => {
+    const d = this.state.dropped[0];
+    if (!d) return;
+    this.setState(s => ({ dropped: s.dropped.filter(x => x.tabId !== d.tabId) }));
+    this.closeTab(d.tabId, true);
+  };
 
   // ---- Teams session ----
   // The session survives app restarts: teams/client.ts keeps the unlocked identity + refresh token
@@ -2289,7 +2322,10 @@ export default class App extends React.Component<any, any> {
   _importOneHost(host, secret) {
     if (!host) return;
     const id = this.genId();
-    const h = { ...host, id, online: true, lastUsed: 'never' };
+    // Whitelist the fields an imported file may set. Spreading the whole object
+    // let a shared .sshache.json arrive with agentAllowed/agentAutoAllow already
+    // true — that is the agent bridge's default-deny defeated by a file.
+    const h = { ...pickHostFields(host), id, online: true, lastUsed: 'never' };
     this.setState((s) => ({ hosts: [...s.hosts, h], view: 'dashboard', activeFolder: 'all', search: '', activeTags: [], newHostId: id }));
     if (secret) secretSet(id, secret);
     setTimeout(() => this.setState((s) => (s.newHostId === id ? { newHostId: null } : {})), 2200);
@@ -2484,11 +2520,13 @@ export default class App extends React.Component<any, any> {
       const path = await save({ defaultPath: (host.name || 'connection') + '.sshache.json', filters: [{ name: 'SSH Ache connection', extensions: ['json'] }] });
       if (!path) return;
       try {
-        const secret = await secretGet(host.id);
+        // The secret only travels in an encrypted file — a blank password used to
+        // write the password / passphrase / private key out as plain JSON.
+        const secret = io.value ? await secretGet(host.id) : null;
         const inner = { kind: 'ssh-ache-connection', host, secret: secret || null };
-        const data = io.value ? await encryptJson(inner, io.value) : JSON.stringify({ kind: 'ssh-ache-connection-plain', host, secret: secret || null });
+        const data = io.value ? await encryptJson(inner, io.value) : JSON.stringify({ kind: 'ssh-ache-connection-plain', host, secret: null });
         await invoke('write_file', { path, data });
-        this.pushToast({ type: 'ok', title: io.value ? 'Connection exported (encrypted)' : 'Connection exported', msg: host.name });
+        this.pushToast({ type: 'ok', title: io.value ? 'Connection exported (encrypted)' : 'Connection exported', msg: host.name + (io.value ? '' : ' · without secrets') });
       } catch (e) {
         this.pushToast({ type: 'err', title: 'Export failed', msg: String(e) });
       }
@@ -2561,7 +2599,7 @@ export default class App extends React.Component<any, any> {
   }
 
   // ---- Key Vault: named private keys, reusable across connections. Metadata in state.vaultKeys;
-  // the key text + passphrase live in the OS keychain under 'key:<id>' (never plaintext in state). ----
+  // the key text + passphrase live in the secret store under 'key:<id>' (never in app state). ----
   _keyLabel(keyText) {
     const t = (keyText || '').slice(0, 90);
     if (/BEGIN OPENSSH/.test(t)) return 'OpenSSH';
@@ -3002,8 +3040,11 @@ export default class App extends React.Component<any, any> {
     let connecting = null;
     if (s.connecting) {
       const h = s.connecting.host;
-      const labels = ['Resolving ' + h.addr, 'Negotiating ciphers · aes256-gcm', 'Authenticating · publickey', 'Opening shell session'];
       const failed = s.connecting.failed;
+      // One real state. The old four-step list was decorative — `step` never
+      // advanced past 0 and "Negotiating ciphers · aes256-gcm" was a hardcoded
+      // string, not the cipher actually negotiated.
+      const labels = [failed ? 'Connection refused or authentication failed' : 'Opening SSH session · verifying host key, authenticating'];
       connecting = {
         titleText: failed ? 'Connection failed' : 'Connecting to ' + h.name,
         target: h.user + '@' + h.addr,
@@ -3316,6 +3357,12 @@ export default class App extends React.Component<any, any> {
       confirmCloseName: s.confirmClose ? s.confirmClose.name : '',
       confirmCloseTab: () => this.confirmCloseTab(),
       cancelConfirmClose: () => this.setState({ confirmClose: null }),
+      // dropped session prompt
+      droppedOpen: s.dropped.length > 0,
+      droppedLabel: s.dropped.length ? s.dropped[0].label : '',
+      droppedMore: Math.max(0, s.dropped.length - 1),
+      reconnectDropped: this.reconnectDropped,
+      closeDroppedTab: this.closeDroppedTab,
 
       // view nav
       isDashboard: s.view === 'dashboard', isWorkspace: s.view === 'workspace',
@@ -3343,6 +3390,12 @@ export default class App extends React.Component<any, any> {
       confirmCloseName: s.confirmClose ? s.confirmClose.name : '',
       confirmCloseTab: () => this.confirmCloseTab(),
       cancelConfirmClose: () => this.setState({ confirmClose: null }),
+      // dropped session prompt
+      droppedOpen: s.dropped.length > 0,
+      droppedLabel: s.dropped.length ? s.dropped[0].label : '',
+      droppedMore: Math.max(0, s.dropped.length - 1),
+      reconnectDropped: this.reconnectDropped,
+      closeDroppedTab: this.closeDroppedTab,
 
       // view nav
       isDashboard: s.view === 'dashboard', isWorkspace: s.view === 'workspace',
@@ -3477,6 +3530,8 @@ export default class App extends React.Component<any, any> {
       onFwdLocal: (e) => this.setFwd('localPort', e.target.value),
       onFwdRemoteHost: (e) => this.setFwd('remoteHost', e.target.value),
       onFwdRemotePort: (e) => this.setFwd('remotePort', e.target.value),
+      fwdBindAll: !!(s.fwdPrompt && s.fwdPrompt.bindAll),
+      toggleFwdBindAll: () => this.setFwd('bindAll', !(this.state.fwdPrompt && this.state.fwdPrompt.bindAll)),
       submitForward: () => this.submitForward(),
       cancelForward: () => this.setState({ fwdPrompt: null }),
       forwardCount: s.forwards.length,
@@ -3507,7 +3562,7 @@ export default class App extends React.Component<any, any> {
       ioOpen: !!s.ioPrompt,
       ioTitle: s.ioPrompt ? ({ export: 'Export — encrypt with a password', export1: 'Export connection — optional password', import1: 'Import connection or workspace', exportWs: 'Export workspace — optional password', import: 'Import — enter the password' }[s.ioPrompt.mode] || 'Import') : '',
       ioLabel: s.ioPrompt ? (s.ioPrompt.mode === 'export' ? 'New password' : 'Password') : '',
-      ioHint: s.ioPrompt ? ({ export: 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.', export1: 'Leave blank to export as plain JSON. With a password, the file (connection + its secret) is AES-256-GCM encrypted.', import1: 'Enter the password only if the file was exported with one — otherwise leave it blank.', exportWs: 'Leave blank to export the arrangement and its connections WITHOUT secrets. With a password, the file (workspace + connections + their secrets) is AES-256-GCM encrypted.', import: 'Enter the password used when this file was exported.' }[s.ioPrompt.mode] || '') : '',
+      ioHint: s.ioPrompt ? ({ export: 'The backup (hosts + saved secrets) is encrypted with this password — you’ll need it to import.', export1: 'Leave blank to export the connection as plain JSON, WITHOUT its saved password or key. With a password, the file (connection + its secret) is AES-256-GCM encrypted.', import1: 'Enter the password only if the file was exported with one — otherwise leave it blank.', exportWs: 'Leave blank to export the arrangement and its connections WITHOUT secrets. With a password, the file (workspace + connections + their secrets) is AES-256-GCM encrypted.', import: 'Enter the password used when this file was exported.' }[s.ioPrompt.mode] || '') : '',
       ioCta: s.ioPrompt ? ({ export: 'Choose file & export', export1: 'Choose file & export', import1: 'Import', exportWs: 'Choose file & export', import: 'Import' }[s.ioPrompt.mode] || 'Import') : '',
       ioValue: s.ioPrompt ? s.ioPrompt.value : '',
       onIoInput: (e) => this.setState(st => ({ ioPrompt: st.ioPrompt ? { ...st.ioPrompt, value: e.target.value } : null })),
@@ -4519,7 +4574,7 @@ export default class App extends React.Component<any, any> {
                     <div onClick={v.toggleRestoreTabs} style={v.restoreTabsTrack}><span style={v.restoreTabsKnob}></span></div>
                   </div>
                   <div style={css("display:flex;align-items:center;gap:12px;")}>
-                    <div style={css("flex:1;")}><div style={css("font-size:12px;color:#cfcfd6;")}>Lock vault after idle</div><div style={css("font-size:10.5px;color:#54545e;margin-top:2px;")}>Re-enter passphrase after 15 min</div></div>
+                    <div style={css("flex:1;")}><div style={css("font-size:12px;color:#cfcfd6;")}>Lock the screen after idle</div><div style={css("font-size:10.5px;color:#54545e;margin-top:2px;")}>Re-enter passphrase after 15 min. Sessions, forwards and the MCP server keep running behind the lock.</div></div>
                     <div onClick={v.toggleLockIdle} style={v.lockIdleTrack}><span style={v.lockIdleKnob}></span></div>
                   </div>
                 </div>
@@ -4586,7 +4641,7 @@ export default class App extends React.Component<any, any> {
             <div onClick={v.stop} style={css("width:404px;max-width:96%;background:#0c0c10;border:1px solid rgba(255,107,120,.3);border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.6);padding:26px 24px;text-align:center;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
               <div style={css("width:52px;height:52px;margin:0 auto;border-radius:14px;display:flex;align-items:center;justify-content:center;background:rgba(255,107,120,.12);border:1px solid rgba(255,107,120,.35);color:#ff6b78;font-size:24px;")}>⚠</div>
               <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:16px;")}>Clear all data?</div>
-              <div style={css("font-size:12.5px;color:#9a9aa3;margin-top:9px;line-height:1.6;")}>This permanently deletes every saved connection, your settings, and all secrets stored in the OS keychain. This can't be undone.</div>
+              <div style={css("font-size:12.5px;color:#9a9aa3;margin-top:9px;line-height:1.6;")}>This permanently deletes every saved connection, your settings, and every stored secret — including Key Vault keys. This can't be undone.</div>
               <div style={css("display:flex;gap:10px;margin-top:22px;")}>
                 <Hov as="button" onClick={v.cancelClearConfirm} s="flex:1;padding:11px;background:#101015;border:1px solid #20202a;border-radius:9px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
                 <Hov as="button" onClick={v.doClearAll} s="flex:1;padding:11px;background:#ff6b78;border:none;border-radius:9px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;" h="background:#ff8591;">Delete everything</Hov>
@@ -4702,7 +4757,13 @@ export default class App extends React.Component<any, any> {
                         <input value={v.fwdLocal} onChange={v.onFwdLocal} placeholder="3000" spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 11px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
                       </div>
                     </div>
-                    <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>The server listens on <span style={css("color:#9a9aa3;")}>:{v.fwdRemotePort || '…'}</span> and forwards back to <span style={css("color:#9a9aa3;")}>{v.fwdRemoteHost || '…'}:{v.fwdLocal || '…'}</span>. Needs <span style={css("color:#9a9aa3;")}>GatewayPorts</span> on the server for non-localhost binds.</div>
+                    <div onClick={v.toggleFwdBindAll} style={css("display:flex;align-items:center;gap:8px;cursor:pointer;")}>
+                      <div style={{ width: '32px', height: '18px', borderRadius: '9px', background: v.fwdBindAll ? '#ffcf5c' : '#26262e', position: 'relative', flex: 'none' }}>
+                        <span style={{ position: 'absolute', top: '2px', left: v.fwdBindAll ? '16px' : '2px', width: '14px', height: '14px', borderRadius: '50%', background: '#fff', transition: 'left .15s ease' }}></span>
+                      </div>
+                      <span style={{ fontSize: '11px', color: v.fwdBindAll ? '#ffcf5c' : '#9a9aa3' }}>Expose on all interfaces (0.0.0.0)</span>
+                    </div>
+                    <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>The server listens on <span style={css("color:#9a9aa3;")}>{v.fwdBindAll ? '0.0.0.0' : '127.0.0.1'}:{v.fwdRemotePort || '…'}</span> and forwards back to <span style={css("color:#9a9aa3;")}>{v.fwdRemoteHost || '…'}:{v.fwdLocal || '…'}</span>. Loopback-only by default, like <span style={css("color:#9a9aa3;")}>ssh -R</span>; exposing it to every host that can reach the server needs <span style={css("color:#9a9aa3;")}>GatewayPorts</span> enabled there.</div>
                   </>
                 ) : (
                   <>
@@ -4758,11 +4819,11 @@ export default class App extends React.Component<any, any> {
         {v.lockSetOpen && (
           <div onClick={v.cancelLockSet} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:79;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:380px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
-              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>Set a vault passphrase</div>
+              <div style={css("padding:18px 20px 4px;font-size:14px;font-weight:700;color:#f2f2f5;")}>Set a screen-lock passphrase</div>
               <div style={css("padding:8px 20px 18px;display:flex;flex-direction:column;gap:9px;")}>
                 <div style={css("font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6a6a74;")}>Passphrase</div>
                 <input value={v.lockSetValue} onChange={v.onLockSetInput} onKeyDown={v.onLockSetKey} type="password" autoFocus spellCheck={false} style={css("width:100%;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
-                <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Required to unlock after 15 min idle. Stored as a hash — not recoverable.</div>
+                <div style={css("font-size:10.5px;color:#54545e;line-height:1.5;")}>Required to unlock after 15 min idle. Stored as a hash — not recoverable. It locks the window only: it does not re-encrypt anything on disk, and open sessions stay connected.</div>
               </div>
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.cancelLockSet} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Cancel</Hov>
@@ -4777,7 +4838,7 @@ export default class App extends React.Component<any, any> {
           <div style={css("position:absolute;inset:0;background:#09090b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:95;animation:acaFade .15s ease;")}>
             <span style={css("width:34px;height:34px;background:#ff7a59;border-radius:8px;transform:rotate(45deg);box-shadow:0 0 24px rgba(var(--accent-rgb),.5);")}></span>
             <div style={css("font-size:16px;font-weight:700;color:#f2f2f5;margin-top:6px;")}>{PRODUCT.name} is locked</div>
-            <div style={css("font-size:11.5px;color:#6a6a74;")}>Enter your vault passphrase to unlock.</div>
+            <div style={css("font-size:11.5px;color:#6a6a74;")}>Enter your screen-lock passphrase to unlock. Sessions and forwards are still running.</div>
             <div style={css("display:flex;gap:8px;margin-top:4px;")}>
               <input value={v.unlockValue} onChange={v.onUnlockInput} onKeyDown={v.onUnlockKey} type="password" autoFocus spellCheck={false} placeholder="Passphrase" style={css("width:240px;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:11px 13px;color:#ededf0;font:inherit;font-size:13px;outline:none;")} />
               <Hov as="button" onClick={v.submitUnlock} s="padding:11px 18px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Unlock</Hov>
@@ -4891,6 +4952,29 @@ export default class App extends React.Component<any, any> {
         )}
 
         {/* CONFIRM CLOSE SESSION */}
+        {/* SESSION DROPPED — offer to reconnect the pane, or close the tab */}
+        {v.droppedOpen && (
+          <div style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:79;animation:acaFade .12s ease;")}>
+            <div onClick={v.stop} style={css("width:420px;max-width:94%;background:#0c0c10;border:1px solid rgba(255,176,32,.35);border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
+              <div style={css("display:flex;align-items:center;gap:10px;padding:18px 20px 4px;")}>
+                <span style={css("width:8px;height:8px;border-radius:50%;background:#ffb020;box-shadow:0 0 8px rgba(255,176,32,.6);flex:none;")}></span>
+                <span style={css("font-size:14px;font-weight:700;color:#f2f2f5;flex:1;")}>Connection lost</span>
+                {v.droppedMore > 0 && (<span style={css("font-size:10.5px;color:#6a6a74;")}>+{v.droppedMore} more</span>)}
+              </div>
+              <div style={css("padding:8px 20px 4px;font-size:12px;color:#cfcfd6;line-height:1.55;")}>
+                The session to <span style={css("color:#ededf0;font-weight:600;")}>{v.droppedLabel}</span> ended — an idle timeout, a dropped network, or the server closing it.
+              </div>
+              <div style={css("padding:4px 20px 18px;font-size:11px;color:#6a6a74;line-height:1.5;")}>
+                Reconnecting opens a fresh shell on the same host in this pane. The tab, its layout and its scrollback stay as they are.
+              </div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
+                <Hov as="button" onClick={v.closeDroppedTab} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Close tab</Hov>
+                <Hov as="button" onClick={v.reconnectDropped} s="padding:9px 18px;background:var(--accent);border:none;border-radius:8px;color:var(--accent-ink);font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;" h="background:var(--accent-hi);">Reconnect</Hov>
+              </div>
+            </div>
+          </div>
+        )}
+
         {v.confirmCloseOpen && (
           <div onClick={v.cancelConfirmClose} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:78;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:380px;max-width:94%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>

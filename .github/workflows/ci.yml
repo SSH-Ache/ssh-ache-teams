@@ -1,0 +1,46 @@
+name: CI
+
+# Two gates per push: the frontend compiles on a supported Node, and the Rust
+# backend compiles on every platform we ship. The Rust check used to run only on
+# tag releases, which is how a Windows-only build break (HOME is unset there)
+# survived in main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev build-essential file
+      # tauri::generate_context! reads ../dist, so give it something to embed.
+      - run: mkdir -p dist && echo "<!doctype html>" > dist/index.html
+        shell: bash
+      - run: cargo check --manifest-path src-tauri/Cargo.toml
