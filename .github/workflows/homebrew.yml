@@ -119,5 +119,12 @@ jobs:
             echo "Cask already up to date."
           else
             git commit -m "sshache-teams ${VERSION}"
-            git push
+            # The community release bumps sshache.rb in this same tap, often seconds apart, so a bare
+            # push can lose the race ("cannot lock ref"). Rebase onto what it landed and retry — the two
+            # jobs touch different files, so the rebase never conflicts.
+            for attempt in 1 2 3 4 5; do
+              if git pull --rebase -q && git push -q; then break; fi
+              if [ "$attempt" = 5 ]; then echo "::error::Push to ${TAP_REPO} failed after 5 attempts."; exit 1; fi
+              sleep $((RANDOM % 5 + 2))
+            done
           fi
