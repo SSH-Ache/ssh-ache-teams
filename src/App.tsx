@@ -738,8 +738,11 @@ function TermPane({ session, theme, fontSize, cursor, scrollback, onConnected, o
           if (onHostKey) onHostKey(parts[1] || "", parts[2] || "");
           return;
         }
-        if (msg === "KEY_CHANGED" || /key.?chang|chang.+key/i.test(msg)) {
+        if (msg.indexOf("KEY_CHANGED") === 0 || /key.?chang|chang.+key/i.test(msg)) {
+          const parts = msg.split("\u0001"); // ["KEY_CHANGED", new fingerprint, new openssh-key]
           term.writeln(`\r\n\x1b[1;31m⚠ HOST KEY CHANGED for ${h.addr} — possible man-in-the-middle.\x1b[0m`);
+          // The new key came back: let the user verify + replace it (server rebuilt / re-keyed).
+          if (parts[2] && onHostKey) { onHostKey(parts[1] || "", parts[2], true); return; }
           term.writeln(`\x1b[31mRemove the stale ~/.ssh/known_hosts line if you trust the change, then reconnect.\x1b[0m`);
           if (onError) onError("host key changed for " + h.addr);
           return;
@@ -2048,11 +2051,11 @@ export default class App extends React.Component<any, any> {
     }
     this.pushToast({ type: 'err', title: 'Connection failed', msg: msg.length > 90 ? msg.slice(0, 90) + '…' : msg });
   }
-  // First-seen host key: pause, show the fingerprint, let the user decide.
-  handleHostKey(tab, fp, key) {
+  // First-seen (or changed) host key: pause, show the fingerprint, let the user decide.
+  handleHostKey(tab, fp, key, changed) {
     const c = this.state.connecting;
     if (!c) return;
-    this.setState({ connecting: null, hostKeyPrompt: { host: c.host, secret: c.secret, keyText: c.keyText || '', jump: c.jump || null, tabId: tab.id, fp, key } });
+    this.setState({ connecting: null, hostKeyPrompt: { host: c.host, secret: c.secret, keyText: c.keyText || '', jump: c.jump || null, tabId: tab.id, fp, key, changed: !!changed } });
   }
   acceptHostKey = () => {
     const hk = this.state.hostKeyPrompt;
@@ -2875,7 +2878,7 @@ export default class App extends React.Component<any, any> {
         cursor: s.settings.cursor, scrollback: parseInt(s.settings.scrollback, 10) || 1000,
         onConnected: () => this.handlePaneConnected(tab, p.id), onError: (msg) => this.handlePaneError(tab, p.id, msg),
         onClosed: () => this.handlePaneClosed(tab, p.id),
-        onHostKey: (fp, key) => this.handleHostKey(tab, fp, key),
+        onHostKey: (fp, key, changed) => this.handleHostKey(tab, fp, key, changed),
         onCwd: (path) => this.setPaneCwd(p.sessionId, path),
         onTrigger: this.handleTrigger,
         boxStyle: { position:'relative', ...place, minWidth:0, minHeight:0, display:'flex', flexDirection:'column', background:theme.bg, border:'1px solid ' + (active ? 'rgba(var(--accent-rgb),.4)' : '#1a1a20'), borderRadius:'7px', overflow:'hidden', boxShadow: active ? '0 0 0 1px rgba(var(--accent-rgb),.12)' : 'none', transition:'border-color .15s ease' },
@@ -3352,6 +3355,7 @@ export default class App extends React.Component<any, any> {
       hostKeyName: s.hostKeyPrompt ? s.hostKeyPrompt.host.name : '',
       hostKeyTarget: s.hostKeyPrompt ? (s.hostKeyPrompt.host.user + '@' + s.hostKeyPrompt.host.addr + ':' + (s.hostKeyPrompt.host.port || '22')) : '',
       hostKeyFp: s.hostKeyPrompt ? s.hostKeyPrompt.fp : '',
+      hostKeyChanged: !!(s.hostKeyPrompt && s.hostKeyPrompt.changed),
       acceptHostKey: this.acceptHostKey, rejectHostKey: this.rejectHostKey,
       confirmCloseOpen: !!s.confirmClose,
       confirmCloseName: s.confirmClose ? s.confirmClose.name : '',
@@ -3385,6 +3389,7 @@ export default class App extends React.Component<any, any> {
       hostKeyName: s.hostKeyPrompt ? s.hostKeyPrompt.host.name : '',
       hostKeyTarget: s.hostKeyPrompt ? (s.hostKeyPrompt.host.user + '@' + s.hostKeyPrompt.host.addr + ':' + (s.hostKeyPrompt.host.port || '22')) : '',
       hostKeyFp: s.hostKeyPrompt ? s.hostKeyPrompt.fp : '',
+      hostKeyChanged: !!(s.hostKeyPrompt && s.hostKeyPrompt.changed),
       acceptHostKey: this.acceptHostKey, rejectHostKey: this.rejectHostKey,
       confirmCloseOpen: !!s.confirmClose,
       confirmCloseName: s.confirmClose ? s.confirmClose.name : '',
@@ -4668,25 +4673,25 @@ export default class App extends React.Component<any, any> {
           </div>
         )}
 
-        {/* HOST KEY CONFIRM (first-seen) */}
+        {/* HOST KEY CONFIRM (first-seen, or changed) */}
         {v.hostKeyOpen && (
           <div onClick={v.rejectHostKey} style={css("position:absolute;inset:0;background:rgba(5,5,7,.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:32px;z-index:75;animation:acaFade .12s ease;")}>
             <div onClick={v.stop} style={css("width:460px;max-width:96%;background:#0c0c10;border:1px solid #26262e;border-radius:14px;box-shadow:0 36px 90px rgba(0,0,0,.65);overflow:hidden;animation:acaModal .18s cubic-bezier(.2,.8,.2,1);")}>
               <div style={css("display:flex;align-items:center;gap:11px;padding:18px 20px 8px;")}>
                 <span style={css("width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:7px;background:rgba(var(--accent-rgb),.12);color:#ff7a59;font-size:14px;")}>⚿</span>
                 <div style={css("flex:1;")}>
-                  <div style={css("font-size:14px;font-weight:700;color:#f2f2f5;")}>Unknown host key</div>
+                  <div style={css("font-size:14px;font-weight:700;color:" + (v.hostKeyChanged ? "#ff6b78" : "#f2f2f5") + ";")}>{v.hostKeyChanged ? 'Host key CHANGED' : 'Unknown host key'}</div>
                   <div style={css("font-size:11px;color:#6a6a74;margin-top:1px;")}>{v.hostKeyName} · {v.hostKeyTarget}</div>
                 </div>
               </div>
               <div style={css("padding:4px 20px 16px;display:flex;flex-direction:column;gap:10px;")}>
-                <div style={css("font-size:12px;color:#cfcfd6;line-height:1.5;")}>First time connecting to this server. Verify the SHA256 fingerprint matches the server's real key before trusting it.</div>
+                <div style={css("font-size:12px;color:#cfcfd6;line-height:1.5;")}>{v.hostKeyChanged ? "This server's key differs from the one in ~/.ssh/known_hosts. Expected if it was rebuilt or re-keyed — otherwise this may be a man-in-the-middle. Only trust the new key once you've verified it." : "First time connecting to this server. Verify the SHA256 fingerprint matches the server's real key before trusting it."}</div>
                 <div style={css("font-size:11.5px;color:#ededf0;background:#0e0e12;border:1px solid #20202a;border-radius:8px;padding:10px 12px;word-break:break-all;")}>{v.hostKeyFp}</div>
-                <div style={css("font-size:10.5px;color:#54545e;")}>Trusting adds it to ~/.ssh/known_hosts; you won't be asked again.</div>
+                <div style={css("font-size:10.5px;color:#54545e;")}>{v.hostKeyChanged ? 'Trusting replaces the old entries in ~/.ssh/known_hosts (backup: known_hosts.old).' : "Trusting adds it to ~/.ssh/known_hosts; you won't be asked again."}</div>
               </div>
               <div style={css("display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #18181f;")}>
                 <Hov as="button" onClick={v.rejectHostKey} s="padding:9px 14px;background:#101015;border:1px solid #20202a;border-radius:8px;color:#b9b9c2;font:inherit;font-size:12.5px;cursor:pointer;" h="background:#16161c;color:#ededf0;">Reject</Hov>
-                <Hov as="button" onClick={v.acceptHostKey} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">Trust &amp; connect</Hov>
+                <Hov as="button" onClick={v.acceptHostKey} s="padding:9px 16px;background:#ff7a59;border:none;border-radius:8px;color:#0c0b0a;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;" h="background:#ff8d70;">{v.hostKeyChanged ? 'Trust new key' : 'Trust & connect'}</Hov>
               </div>
             </div>
           </div>

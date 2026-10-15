@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 enum KeyIssue {
     Unknown(String, String), // (fingerprint, openssh public key)
-    Changed,
+    Changed(String, String), // same, for the NEW key the server now presents
 }
 
 struct Handler {
@@ -66,20 +66,25 @@ impl client::Handler for Handler {
     //   known host, key matches -> Ok(true)
     //   unknown host            -> record fingerprint + reject; the UI confirms,
     //                              then `trust_host` learns it and we reconnect
-    //   known host, key CHANGED -> record + abort (possible MITM)
+    //   known host, key CHANGED -> record + abort (possible MITM); the UI shows
+    //                              the new fingerprint with a loud warning and
+    //                              only an explicit confirm replaces the entry
     // The mismatch MUST stay a rejection — that is the entire MITM protection.
     async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool, Self::Error> {
-        match check_known_hosts(&self.host, self.port, key) {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                let fp = key.fingerprint(russh::keys::ssh_key::HashAlg::Sha256).to_string();
-                let openssh = key.to_openssh().unwrap_or_default();
+        let res = check_known_hosts(&self.host, self.port, key);
+        if matches!(res, Ok(true)) {
+            return Ok(true);
+        }
+        let fp = key.fingerprint(russh::keys::ssh_key::HashAlg::Sha256).to_string();
+        let openssh = key.to_openssh().unwrap_or_default();
+        match res {
+            Err(e) => {
+                *self.issue.lock().unwrap() = Some(KeyIssue::Changed(fp, openssh));
+                Err(e.into())
+            }
+            _ => {
                 *self.issue.lock().unwrap() = Some(KeyIssue::Unknown(fp, openssh));
                 Ok(false)
-            }
-            Err(e) => {
-                *self.issue.lock().unwrap() = Some(KeyIssue::Changed);
-                Err(e.into())
             }
         }
     }
@@ -357,7 +362,7 @@ async fn open_session(
             match jissue.lock().unwrap().take() {
                 Some(KeyIssue::Unknown(fp, _)) => return Err(format!(
                     "jump host {} is not yet trusted (key {fp}). Open a direct session to it once to verify and trust its key, then retry.", j.host)),
-                Some(KeyIssue::Changed) => return Err(format!(
+                Some(KeyIssue::Changed(..)) => return Err(format!(
                     "jump host {} key CHANGED — possible man-in-the-middle; refusing.", j.host)),
                 None => {}
             }
@@ -375,7 +380,7 @@ async fn open_session(
     // Structured key errors for the target (\u{1} = field separator).
     match issue.lock().unwrap().take() {
         Some(KeyIssue::Unknown(fp, key)) => return Err(format!("UNKNOWN_HOST\u{1}{fp}\u{1}{key}")),
-        Some(KeyIssue::Changed) => return Err("KEY_CHANGED".to_string()),
+        Some(KeyIssue::Changed(fp, key)) => return Err(format!("KEY_CHANGED\u{1}{fp}\u{1}{key}")),
         None => {}
     }
     let session = connect_res.map_err(|e| format!("connect: {e}"))?;
@@ -617,9 +622,29 @@ fn secret_delete(id: String) -> Result<(), String> {
 }
 
 // Persist a server key to ~/.ssh/known_hosts after the user confirms it (Phase 3).
+// A confirmed CHANGED key (server rebuilt / re-keyed) first drops the host's
+// stale lines: russh keeps refusing while any same-type line mismatches, and
+// appending alone would leave them in place.
 #[tauri::command]
 fn trust_host(host: String, port: u16, key: String) -> Result<(), String> {
     let pk = PublicKey::from_openssh(&key).map_err(|e| format!("parse key: {e}"))?;
+    if check_known_hosts(&host, port, &pk).is_err() {
+        // ponytail: ssh-keygen -R already handles hashed and [host]:port entries
+        // (and keeps known_hosts.old); needs OpenSSH on PATH — stock on macOS,
+        // Linux, Windows 10+. Parse the file ourselves if that ever bites.
+        let target = if port == 22 { host.clone() } else { format!("[{host}]:{port}") };
+        let file = home_dir()?.join(".ssh").join("known_hosts");
+        let out = std::process::Command::new("ssh-keygen")
+            .arg("-R")
+            .arg(&target)
+            .arg("-f")
+            .arg(&file)
+            .output()
+            .map_err(|e| format!("remove old key (ssh-keygen): {e} — delete the {target} lines from ~/.ssh/known_hosts by hand"))?;
+        if !out.status.success() {
+            return Err(format!("remove old key: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+    }
     learn_known_hosts(&host, port, &pk).map_err(|e| format!("learn: {e}"))?;
     Ok(())
 }
