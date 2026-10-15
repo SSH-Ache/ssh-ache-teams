@@ -345,6 +345,9 @@ const MCP_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
 
 // "What's new" changelog. Newest first; add an entry at the top when cutting a release.
 const CHANGELOG = [
+  { version: '0.10.1', items: [
+    'Fixed: a server rebuilt behind the same address could never be reached again — a changed host key was a dead end unless you hand-edited ~/.ssh/known_hosts. The app now shows the new fingerprint with a clear warning, and if you trust it, replaces the old entry (backup kept as known_hosts.old) and connects.',
+  ] },
   { version: '0.9.1', items: [
     'Plan comparison now matches what the product actually does. Access grants, SSO, SCIM and admin key escrow are marked “API today, UI next” rather than looking like screens you already have, and two entries that were never implemented — secret rotation reminders and IP allowlists — are gone.',
     'The Auditor role is real and now assignable: invite someone as a read-only Auditor from the members panel on Enterprise.',
